@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image } from 'react-native';
 import { useCameraDevice, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
-import {
-  useFaceDetectorOutput,
-  useImageFaceDetector,
-  type Face,
-} from 'react-native-vision-camera-face-detector';
+import { useFaceDetectorOutput, type Face } from 'react-native-vision-camera-face-detector';
+// Still-image detection for the capture burst. NOT the vision-camera-face-detector's
+// useImageFaceDetector — that module's native detectFaces is broken on Android (it
+// receives the Nitro-boxed `InputImage` sealed class but checks `is String`/`is Map`,
+// so every input hits the `else` branch → "Invalid image type"). This ML Kit binding
+// detects on a file URI correctly and is already in the native build (legacy path used it).
+import FaceDetection from '@react-native-ml-kit/face-detection';
 
 import { useLiveness } from '../liveness/useLiveness';
 import { FaceRecognizer } from '../ml/FaceRecognizer';
@@ -19,8 +21,6 @@ import { FaceLandmarkResult } from '../types';
 
 type AuthStatus = 'IDLE' | 'ENROLLING' | 'VERIFYING' | 'SUCCESS' | 'FAILED';
 type Facing = 'front' | 'back';
-
-const DEG2RAD = Math.PI / 180;
 
 /**
  * VisionCamera-based face auth. Liveness runs on the real-time native frame stream
@@ -48,14 +48,6 @@ export function useFaceAuthVision() {
   useEffect(() => {
     livenessStatusRef.current = livenessState.status;
   }, [livenessState.status]);
-
-  // Still-image detector for the end-of-flow capture burst (replaces ML Kit detect).
-  const imageDetector = useImageFaceDetector({
-    performanceMode: 'accurate',
-    runLandmarks: true,
-    runClassifications: true,
-    minFaceSize: 0.15,
-  });
 
   useEffect(() => {
     Promise.all([FaceRecognizer.init(), FaceAntiSpoof.init()]).catch((e) =>
@@ -92,15 +84,38 @@ export function useFaceAuthVision() {
       }
 
       const f = faces[0];
+
+      // Face-validity gate. ML Kit only returns eye-open / smile classifications when
+      // it has actually located eyes and a mouth on a detected face. A fist or random
+      // blob that the detector false-positives on lacks these, so we treat it as
+      // "no face" and refuse to advance the liveness challenges on a non-face.
+      const hasClassifications =
+        f.smilingProbability != null &&
+        f.leftEyeOpenProbability != null &&
+        f.rightEyeOpenProbability != null;
+      if (!hasClassifications) {
+        processFrame({
+          hasFace: false,
+          boundingBox: null,
+          blendshapes: null,
+          yaw: 0,
+          pitch: 0,
+          roll: 0,
+        });
+        return;
+      }
+
       const result: FaceLandmarkResult = {
         hasFace: true,
         boundingBox: { x: f.bounds.x, y: f.bounds.y, width: f.bounds.width, height: f.bounds.height },
         blendshapes: null,
-        // VERIFY ON DEVICE: yawAngle sign for front camera. If turn-left/right are
-        // swapped during enrollment, negate this (yaw: -f.yawAngle * DEG2RAD).
-        yaw: f.yawAngle * DEG2RAD,
-        pitch: f.pitchAngle * DEG2RAD,
-        roll: f.rollAngle * DEG2RAD,
+        // Angles stay in DEGREES — the liveness state machine + config thresholds are
+        // calibrated in degrees (legacy useFaceAuth used `-face.rotationY`, degrees).
+        // yaw negated to match the legacy user-relative sign for the front camera.
+        // VERIFY ON DEVICE: if turn-left/right are swapped, drop the negation.
+        yaw: -f.yawAngle,
+        pitch: f.pitchAngle,
+        roll: f.rollAngle,
         smilingProbability: f.smilingProbability,
         leftEyeOpenProbability: f.leftEyeOpenProbability,
         rightEyeOpenProbability: f.rightEyeOpenProbability,
@@ -117,7 +132,11 @@ export function useFaceAuthVision() {
       () => ({
         onFacesDetected,
         onError,
-        performanceMode: 'fast' as const,
+        // 'accurate' over 'fast': fewer non-face false-positives (e.g. a fist) and
+        // stabler angles. The heavy per-frame JS decode is gone (native detection),
+        // so we can afford it on the live liveness stream.
+        performanceMode: 'accurate' as const,
+        minFaceSize: 0.2, // ignore small/distant blobs; face must fill a fair part of frame
         runClassifications: true, // eye-open / smile probabilities for liveness
         runLandmarks: false, // not needed for liveness; alignment uses the still capture
         cameraFacing: facing,
@@ -137,59 +156,97 @@ export function useFaceAuthVision() {
       Image.getSize(uri, (width, height) => resolve({ width, height }), reject)
     );
 
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  // CameraX ImageCapture is bound asynchronously after the session is active;
+  // the first capture(s) the instant liveness passes can throw
+  // "Not bound to a valid Camera" while the photo use-case is still binding
+  // (the running frame-analysis pipeline delays it). Retry briefly.
+  const capturePhotoWithRetry = useCallback(async (attempts = 4, delayMs = 150) => {
+    let lastErr: unknown;
+    for (let a = 0; a < attempts; a++) {
+      try {
+        return await photoOutputRef.current.capturePhotoToFile({ enableShutterSound: false }, {});
+      } catch (e) {
+        lastErr = e;
+        await sleep(delayMs);
+      }
+    }
+    throw lastErr;
+  }, []);
+
   const captureEmbeddings = useCallback(async () => {
     const wanted =
       currentAction.current === 'VERIFY'
         ? config.recognition.verifyEmbeddings
         : config.recognition.enrollEmbeddings;
 
+    // Give CameraX a moment to bind the photo use-case before the burst.
+    await sleep(120);
+
     const embeddings: number[][] = [];
     let spoofChecks = 0;
     let spoofFails = 0;
     let lastEmbedMs = 0;
 
-    for (let i = 0; i < wanted; i++) {
+    // Collect up to `wanted` GOOD embeddings, with a couple of spare attempts so a
+    // single blurry/off-angle frame doesn't sink the whole burst. We stop as soon as
+    // we have enough — for verify (wanted=1) that's usually a single capture.
+    const maxAttempts = wanted + 2;
+
+    for (let i = 0; i < maxAttempts && embeddings.length < wanted; i++) {
       let uri: string;
       try {
-        const photo = await photoOutputRef.current.capturePhotoToFile({}, {});
+        const photo = await capturePhotoWithRetry();
         uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
       } catch (e) {
         console.warn('capturePhotoToFile failed', e);
         continue;
       }
 
-      const faces = imageDetector.detectFaces({ uri });
+      // 'fast' is enough here: the face was already validated on the live stream,
+      // and 'accurate' roughly doubles still-detect time.
+      const faces = await FaceDetection.detect(uri, {
+        performanceMode: 'fast',
+        landmarkMode: 'all', // eye positions for alignment
+        classificationMode: 'all',
+      });
       if (!faces.length) continue;
       const f = faces[0];
 
       const { width, height } = await getImageSize(uri);
       const normBox = {
-        x: f.bounds.x / width,
-        y: f.bounds.y / height,
-        width: f.bounds.width / width,
-        height: f.bounds.height / height,
+        x: f.frame.left / width,
+        y: f.frame.top / height,
+        width: f.frame.width / width,
+        height: f.frame.height / height,
       };
 
-      // Anti-spoof backstop on the real captured frame.
-      try {
-        const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
-        const spoof = await FaceAntiSpoof.classify(spoofBuf);
-        spoofChecks += 1;
-        if (!spoof.isLive) spoofFails += 1;
-      } catch (e) {
-        console.warn('anti-spoof failed', e);
+      // Anti-spoof backstop — run ONCE on the first detected frame. A photo/screen
+      // attack is constant across frames, so one classification is sufficient and we
+      // avoid an extra tflite run per capture.
+      if (spoofChecks === 0) {
+        try {
+          const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
+          const spoof = await FaceAntiSpoof.classify(spoofBuf);
+          spoofChecks += 1;
+          if (!spoof.isLive) spoofFails += 1;
+        } catch (e) {
+          console.warn('anti-spoof failed', e);
+        }
       }
 
       // Quality gate (geometry uses degrees, like FrameQuality expects).
       const geo = FrameQuality.assessGeometry(
-        { frame: { width: f.bounds.width }, rotationX: f.pitchAngle, rotationY: f.yawAngle },
+        { frame: { width: f.frame.width }, rotationX: f.rotationX, rotationY: f.rotationY },
         width
       );
       if (!geo.ok) continue;
 
+      const lm = f.landmarks;
       const eyes =
-        f.landmarks?.LEFT_EYE && f.landmarks?.RIGHT_EYE
-          ? { left: f.landmarks.LEFT_EYE, right: f.landmarks.RIGHT_EYE }
+        lm?.leftEye && lm?.rightEye
+          ? { left: lm.leftEye.position, right: lm.rightEye.position }
           : null;
       try {
         const tensor = await ImageProcessor.processFaceImage(uri, width, height, normBox, eyes);
@@ -205,7 +262,7 @@ export function useFaceAuthVision() {
 
     const spoofed = spoofChecks > 0 && spoofFails >= Math.ceil(spoofChecks / 2);
     return { embeddings, spoofed, lastEmbedMs };
-  }, [imageDetector]);
+  }, [capturePhotoWithRetry]);
 
   // Resolve the flow once liveness reaches a terminal state.
   useEffect(() => {

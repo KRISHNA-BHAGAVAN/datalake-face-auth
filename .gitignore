@@ -54,5 +54,10 @@ __pycache__/
 # build logs
 gradle-output.txt
 
+# build artifacts
+*.apk
+*.aab
+*.ipa
+
 # graphify generated knowledge graph
 graphify-out/
