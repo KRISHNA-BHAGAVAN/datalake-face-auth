@@ -7,8 +7,8 @@ export const config = {
     blinkOpenBaseline: 0.6, // avg eye-open prob must have reached this first
     blinkClosedThreshold: 0.4, // ...then drop to/below this to count as a blink
     smileThreshold: 0.7,
-    headTurnYawThreshold: 0.25, // radians approx 15 degrees
-    challengeTimeoutMs: 8000,
+    headTurnYawThreshold: 12, // DEGREES — yaw is fed in degrees (see useFaceAuthVision)
+    challengeTimeoutMs: 10000,
   },
   // Silent face anti-spoofing (MiniFASNet V2 TFLite)
   antiSpoof: {
@@ -21,8 +21,8 @@ export const config = {
   // Recognition constraints
   recognition: {
     cosineSimilarityThreshold: 0.65, // Adjust based on model accuracy tests
-    enrollEmbeddings: 5, // averaged into the stored template (accuracy)
-    verifyEmbeddings: 3, // averaged at verify time (fewer = faster match)
+    enrollEmbeddings: 3, // averaged into the stored template (accuracy vs enroll speed)
+    verifyEmbeddings: 1, // single good probe frame — fast verify; burst retries if it's bad
   },
   // Enrollment de-duplication: if a new enrollment matches an existing template at
   // or above this score, it's the same person re-enrolling — don't add a duplicate.
@@ -55,7 +55,6 @@ export const config = {
     captureIntervalMs: 400, // capture/process loop cadence (was 1200; lower = snappier)
   },
   models: {
-    faceLandmarker: 'face_landmarker.task',
     faceRecognizer: 'mobilefacenet.tflite',
     minifasnet: 'minifasnet_v2.tflite',
   }
