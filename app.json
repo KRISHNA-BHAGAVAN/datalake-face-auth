@@ -17,7 +17,8 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.krishna_bhagavan.datalakefaceauth"
     },
     "web": {
       "output": "static",
@@ -34,11 +35,26 @@
             "imageWidth": 76
           }
         }
+      ],
+      "expo-asset",
+      "expo-secure-store",
+      "react-native-fast-tflite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera"
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8e59c0a8-b708-4005-aaad-3860719eab89"
+      }
     }
   }
 }
