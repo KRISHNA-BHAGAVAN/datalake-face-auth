@@ -70,13 +70,48 @@ npm run android      # or: npm run ios
 npm start
 ```
 
-### EAS cloud build (alternative)
+### EAS build (alternative — no local Android Studio/Xcode setup needed)
+
+EAS is Expo's build service. The commands below use `npx eas-cli@latest`, which always runs the
+newest CLI without a global install. First time only, log in (a free Expo account):
 
 ```bash
-eas build --profile development --platform android   # and/or ios
-# install the build on device, then:
-npm start
+npx eas-cli@latest login
 ```
+
+Two build profiles are defined in [`eas.json`](./eas.json):
+
+| Profile | What you get | When to use |
+|---|---|---|
+| `development` | A **dev client** — install on device, then run `npm start` and the app connects to Metro. Supports live reload / debugging. | Day-to-day development. |
+| `preview` | A **standalone installable app** (Android APK). Runs on its own — **no Metro, no laptop needed**. | Sharing a demo / testing on any device. |
+
+**Cloud build** (Expo builds it on their servers, gives you a download link):
+
+```bash
+# Development client
+npx eas-cli@latest build --profile development --platform android   # or: --platform ios
+
+# Standalone preview build (shareable APK)
+npx eas-cli@latest build --profile preview --platform android       # or: --platform ios
+```
+
+**Local build** (builds on your own machine — needs Android SDK + JDK for Android, Xcode for iOS;
+add `--local`):
+
+```bash
+# Development client, built locally
+npx eas-cli@latest build --profile development --platform android --local
+
+# Standalone preview APK, built locally
+npx eas-cli@latest build --profile preview --platform android --local
+```
+
+After a **development** build: install it, then run `npm start`.
+After a **preview** build: just install the APK and open it — nothing else to run.
+
+> Tip: `--platform all` builds Android and iOS together. iOS device builds require an Apple
+> Developer account; Android does not.
 
 See [`docs/vision-camera-rebuild.md`](./docs/vision-camera-rebuild.md) for the native rebuild and
 on-device verification checklist.
