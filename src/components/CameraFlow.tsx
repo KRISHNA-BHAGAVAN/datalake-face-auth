@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { CameraType } from 'expo-camera';
-import { CameraPreview } from '../camera/CameraPreview';
-import { useFaceAuth } from '../hooks/useFaceAuth';
+import { Camera } from 'react-native-vision-camera';
+import { useFaceAuthVision } from '../hooks/useFaceAuthVision';
 import { config } from '../utils/config';
 import { colors, radius, spacing } from '../theme';
+import { AppButton } from './ui/AppButton';
 import { ChallengeCard } from './ChallengeCard';
 import { ScanOverlay } from './ScanOverlay';
 import { ResultOverlay } from './ResultOverlay';
@@ -14,10 +14,10 @@ interface Props {
   mode: 'ENROLL' | 'VERIFY';
 }
 
-// Must match the challenge lists started in useFaceAuth (enroll: 3, verify: 1).
+// Must match the challenge lists started in useFaceAuthVision (enroll: 3, verify: 1).
 const TOTAL_CHALLENGES = { ENROLL: 3, VERIFY: 1 } as const;
 
-/** Shared camera experience for enrollment and verification. */
+/** Shared VisionCamera-based experience for enrollment and verification. */
 export function CameraFlow({ mode }: Props) {
   const router = useRouter();
   const {
@@ -27,14 +27,18 @@ export function CameraFlow({ mode }: Props) {
     isProcessing,
     confidence,
     latencyMs,
-    cameraRef,
+    device,
+    hasPermission,
+    requestPermission,
+    facing,
+    toggleFacing,
+    isActive,
+    faceOutput,
+    photoOutput,
     startEnrollment,
     startVerification,
     reset,
-  } = useFaceAuth();
-
-  const [facing, setFacing] = useState<CameraType>('front');
-  const toggleFacing = () => setFacing((f) => (f === 'front' ? 'back' : 'front'));
+  } = useFaceAuthVision();
 
   const start = mode === 'ENROLL' ? startEnrollment : startVerification;
 
@@ -46,23 +50,40 @@ export function CameraFlow({ mode }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!hasPermission) requestPermission();
+  }, [hasPermission, requestPermission]);
+
+  const outputs = useMemo(() => [faceOutput, photoOutput], [faceOutput, photoOutput]);
+
   const done = authStatus === 'SUCCESS' || authStatus === 'FAILED';
   const livenessStatus = livenessState.status;
-
   const accent =
     livenessStatus === 'PASSED' ? colors.success : livenessStatus === 'FAILED' ? colors.danger : colors.primary;
   const scanning = !done && livenessStatus !== 'PASSED' && livenessStatus !== 'FAILED';
 
   const resultTitle =
-    authStatus === 'SUCCESS'
-      ? mode === 'ENROLL'
-        ? 'Enrolled'
-        : 'Verified'
-      : 'Not Verified';
+    authStatus === 'SUCCESS' ? (mode === 'ENROLL' ? 'Enrolled' : 'Verified') : 'Not Verified';
 
   return (
     <View style={styles.container}>
-      <CameraPreview ref={cameraRef} facing={facing} />
+      {hasPermission && device ? (
+        <Camera style={StyleSheet.absoluteFill} device={device} isActive={isActive} outputs={outputs} />
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.center]}>
+          {!hasPermission ? (
+            <>
+              <Text style={styles.infoText}>Camera permission needed</Text>
+              <AppButton title="Grant Permission" onPress={requestPermission} />
+            </>
+          ) : (
+            <>
+              <ActivityIndicator color={colors.primary} />
+              <Text style={styles.infoText}>No {facing} camera available</Text>
+            </>
+          )}
+        </View>
+      )}
 
       <ScanOverlay accent={accent} scanning={scanning} />
 
@@ -86,7 +107,7 @@ export function CameraFlow({ mode }: Props) {
       {!done && isProcessing && (
         <View style={styles.processing} pointerEvents="none">
           <ActivityIndicator color={colors.primary} />
-          <Text style={styles.processingText}>Analyzing frame…</Text>
+          <Text style={styles.processingText}>Verifying…</Text>
         </View>
       )}
 
@@ -111,6 +132,8 @@ export function CameraFlow({ mode }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  center: { justifyContent: 'center', alignItems: 'center', gap: spacing.lg, padding: spacing.xl },
+  infoText: { color: colors.text, fontSize: 16, fontWeight: '600', textAlign: 'center' },
   top: { position: 'absolute', top: spacing.xxxl, left: spacing.lg, right: spacing.lg, zIndex: 20 },
   processing: {
     position: 'absolute',
