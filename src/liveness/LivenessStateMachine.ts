@@ -4,6 +4,7 @@ import { config } from '../utils/config';
 
 export class LivenessStateMachine {
   private state: LivenessState;
+  private blinkMaxOpen = 0; // highest avg eye-open prob seen during the current BLINK challenge
 
   constructor() {
     this.state = this.getInitialState();
@@ -27,6 +28,7 @@ export class LivenessStateMachine {
     if (challenges.length === 0) return;
     
     const firstChallenge = challenges[0];
+    this.blinkMaxOpen = 0;
     this.state = {
       status: 'IN_PROGRESS',
       currentChallenge: firstChallenge,
@@ -37,6 +39,7 @@ export class LivenessStateMachine {
   }
 
   public reset(): void {
+    this.blinkMaxOpen = 0;
     this.state = this.getInitialState();
   }
 
@@ -65,6 +68,7 @@ export class LivenessStateMachine {
       if (this.state.challengesRemaining.length > 0) {
         // Move to next challenge
         const nextChallenge = this.state.challengesRemaining[0];
+        this.blinkMaxOpen = 0; // reset blink baseline for the next challenge
         this.state.currentChallenge = nextChallenge;
         this.state.challengesRemaining = this.state.challengesRemaining.slice(1);
         this.state.timeoutAt = Date.now() + config.liveness.challengeTimeoutMs;
@@ -83,14 +87,16 @@ export class LivenessStateMachine {
   private checkChallenge(challenge: LivenessChallengeType, result: FaceLandmarkResult): boolean {
     switch (challenge) {
       case 'BLINK': {
-        // Using MLKit/expo-face-detector probabilities instead of blendshapes
-        // Probability goes DOWN when the eye is closed.
-        // Assuming blinkThreshold in config is meant for blendshapes (which go UP when blinking),
-        // we use a threshold of < 0.3 for open probability.
+        // ML Kit eye-open probability drops when the eye closes. Catching a single
+        // fully-closed frame is unreliable at any sane sampling rate, so we detect the
+        // transition: eyes must have been clearly open (baseline), then clearly close.
         const leftOpen = result.leftEyeOpenProbability ?? 1.0;
         const rightOpen = result.rightEyeOpenProbability ?? 1.0;
-        // Consider a blink if both eyes are closed
-        return (leftOpen < 0.3) && (rightOpen < 0.3);
+        const avgOpen = (leftOpen + rightOpen) / 2;
+        this.blinkMaxOpen = Math.max(this.blinkMaxOpen, avgOpen);
+        const wasOpen = this.blinkMaxOpen >= config.liveness.blinkOpenBaseline;
+        const nowClosing = avgOpen <= config.liveness.blinkClosedThreshold;
+        return wasOpen && nowClosing;
       }
       case 'SMILE': {
         // Probability goes UP when smiling.
