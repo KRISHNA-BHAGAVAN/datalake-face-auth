@@ -20,7 +20,7 @@ export const config = {
   },
   // Recognition constraints
   recognition: {
-    cosineSimilarityThreshold: 0.65, // Adjust based on model accuracy tests
+    cosineSimilarityThreshold: 0.45, // calibrated on LFW (benchmark/): 0.65 rejected ~35% of genuine users; 0.45 -> FAR 0.07%, 95.4% acc
     enrollEmbeddings: 3, // averaged into the stored template (accuracy vs enroll speed)
     verifyEmbeddings: 1, // single good probe frame — fast verify; burst retries if it's bad
   },
@@ -28,7 +28,7 @@ export const config = {
   // or above this score, it's the same person re-enrolling — don't add a duplicate.
   // Slightly below the verify threshold so genuine re-enrollments are caught.
   enroll: {
-    duplicateThreshold: 0.62,
+    duplicateThreshold: 0.42, // kept just below verify threshold (0.45) per the invariant above
   },
   // Per-frame quality gate. Frames failing these are skipped for embedding capture
   // so blurry / dark / off-angle frames don't poison the averaged template.
