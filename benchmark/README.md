@@ -16,10 +16,10 @@ Python venv, not bundled by Metro.
 
 | Dataset | Protocol | Accuracy | ROC AUC | TAR@FAR=1% |
 |---|---|---|---|---|
-| **LFW** (Western, curated) | standard 10-fold, 6000 pairs | **96.28% ± 0.56%** | **0.977** | 93.6% |
+| **LFW** (Western, curated) | standard 10-fold, 6000 pairs | **96.75% ± 0.69%** | **0.982** | 94.6% |
 | **Indian** (Bollywood actors) | template-avg, 1500/1500 pairs | **92.4%** (90.9% @ 0.45) | **0.964** | 83.4% |
 
-- **LFW 96.3%** clears the hackathon's **>95% accuracy** bar on the de-facto
+- **LFW 96.8%** clears the hackathon's **>95% accuracy** bar on the de-facto
   standard verification protocol.
 - **Indian 92.4%** demonstrates real device behaviour on Indian demographics, on
   an *uncontrolled, cross-decade* web-scrape (same actor photographed 30+ years
@@ -29,17 +29,17 @@ Python venv, not bundled by Metro.
 ## Why the deployed threshold is 0.45 (not 0.65)
 
 The benchmark drives the threshold choice. The model's separability is fixed
-(AUC 0.977); the cosine threshold only picks the operating point — trading
+(AUC 0.982); the cosine threshold only picks the operating point — trading
 **FRR** (genuine user rejected, usability) against **FAR** (impostor accepted,
 fraud). The old `0.65` was far past the optimum: on LFW it rejected **~35% of
-genuine users** (FRR 34.9%) while buying no extra security (FAR was already 0%
+genuine users** (FRR 33.0%) while buying no extra security (FAR was already 0%
 by 0.50). The sweep is in every run's `report.md` / `sweep.md`:
 
 | threshold | FRR % (genuine rejected) | FAR % (impostor accepted) | balanced acc % |
 |---|---|---|---|
-| 0.373 (LFW peak) | 6.7 | 0.52 | 96.4 |
-| **0.45 (deployed)** | 9.2 | **0.07** | 95.4 |
-| 0.65 (old) | **34.9** | 0.00 | 82.5 |
+| 0.373 (LFW peak) | 5.7 | 0.60 | 96.8 |
+| **0.45 (deployed)** | 8.0 | **0.09** | 95.9 |
+| 0.65 (old) | **33.0** | 0.00 | 83.3 |
 
 `0.45` is security-leaning (FAR ≈ 1 impostor in 1400) while still clearing 95% on
 LFW. Set in `src/utils/config.ts → recognition.cosineSimilarityThreshold`.
@@ -143,7 +143,7 @@ close most of the gap without cheating:
    (AUC 0.916 → **0.964**, accuracy 86.7% → **92.4%**).
 
 We deliberately **do not** claim >95% on Indian demographics — the curated-LFW
-96.3% is the standard-protocol accuracy proof; the Indian 92.4% is a candid,
+96.8% is the standard-protocol accuracy proof; the Indian 92.4% is a candid,
 reproducible demonstration on a deliberately hard real-world distribution.
 
 ## Faithfulness note
