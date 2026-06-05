@@ -1,0 +1,10 @@
+# Benchmark harness deps — standalone, NOT used by the React Native app.
+# Python 3.10–3.12.
+ai-edge-litert          # LiteRT runtime for mobilefacenet.tflite (lighter than full TF)
+mediapipe==0.10.14      # face detection + eye keypoints (for alignment)
+opencv-python==4.10.0.84
+numpy==1.26.4
+scikit-learn==1.5.2     # ROC / AUC
+matplotlib==3.9.2       # ROC + score-distribution plots
+Pillow==10.4.0
+tqdm==4.66.5

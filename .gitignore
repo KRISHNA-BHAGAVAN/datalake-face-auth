@@ -61,3 +61,8 @@ gradle-output.txt
 
 # graphify generated knowledge graph
 graphify-out/
+
+# proposal build artifacts — regenerable from proposal/ (see proposal/README.md)
+DatalakeOfflineFaceAuthProposal.zip
+proposal/*.docx
+proposal/proposal.docx
