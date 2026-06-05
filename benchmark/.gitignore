@@ -1,0 +1,24 @@
+# Benchmark venv + downloaded/derived artifacts. Tracked test data
+# (data/minivision/) is committed and intentionally NOT ignored.
+.venv/
+.venv-convert/
+__pycache__/
+*.pyc
+results/
+results_*/
+
+# LFW download (fetch_lfw.py) — large, regenerate locally.
+# `data/lfw` (no slash) also covers the symlink fetch_lfw.py creates to the
+# sklearn cache — a trailing-slash pattern matches dirs only, not symlinks.
+data/lfw
+data/lfw/
+data/lfw.tgz
+data/pairs.txt
+
+# Indian-demographic sets (download via Kaggle, see README) — large, regenerate locally
+data/indian-actor-images-dataset/
+data/bollywood-celeb-localized-face-dataset/
+
+# run_antispoof.py derived artifacts — regenerated; only the source .jpgs are tracked
+data/minivision/*.crop.png
+data/minivision/*_result.jpg
