@@ -56,11 +56,17 @@ purged.
 
 ## Getting started
 
+> **No AWS required.** Enroll, verify, liveness, and anti-spoof all run **100% on-device**.
+> Skip step 2 entirely and the app works fully offline — no `.env`, no errors. AWS sync is a
+> purely additive feature; with it unconfigured the "Sync to AWS" button simply shows a notice.
+> You do, however, need a **native dev build** — the native modules (VisionCamera, TFLite, ML Kit)
+> are **not** available in Expo Go.
+
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. (Optional) configure AWS sync — copy and fill in
+# 2. (Optional — skip for offline-only) configure AWS sync
 cp .env.example .env
 
 # 3. Build & run a native dev client (Expo Go will NOT work)
@@ -120,13 +126,17 @@ on-device verification checklist.
 
 ## Configuration
 
-AWS sync is optional and driven by environment variables (Expo loads `EXPO_PUBLIC_*` at build time).
-With these unset, the app is fully offline and `SyncManager` is a no-op that preserves local data.
+AWS sync is **optional** and driven by environment variables (Expo loads `EXPO_PUBLIC_*` at build
+time). With these unset the app is fully offline; tapping **Sync to AWS** just shows a notice and no
+data leaves the device — enrollment, verification, and all local data are unaffected.
 
 | Variable | Purpose |
 |---|---|
-| `EXPO_PUBLIC_FACE_SYNC_API_URL` | API Gateway / Lambda endpoint accepting `POST { templates: [...] }` |
-| `EXPO_PUBLIC_FACE_SYNC_API_KEY` | Optional `x-api-key` header |
+| `EXPO_PUBLIC_FACE_SYNC_API_URL` | Lambda Function URL accepting `POST { templates: [...] }` |
+| `EXPO_PUBLIC_FACE_SYNC_API_KEY` | `x-api-key` header (set the matching `SYNC_API_KEY` on the Lambda) |
+
+The sync backend (server-side biometric de-duplication, so re-enrolled people never create
+duplicate rows) lives in [`aws/lambda/`](./aws/lambda/) — see its README to deploy.
 
 Tunable thresholds (liveness, anti-spoof, recognition, quality, alignment) live in
 [`src/utils/config.ts`](./src/utils/config.ts).
@@ -143,8 +153,11 @@ Tunable thresholds (liveness, anti-spoof, recognition, quality, alignment) live 
 4. **Align + preprocess.** Eye-landmark alignment to the ArcFace canonical geometry → 112×112 crop.
 5. **Anti-spoof.** MiniFASNet V2 classifies live vs photo/screen (once per flow).
 6. **Recognize + match.** MobileFaceNet embedding → cosine similarity against local templates
-   (threshold 0.65). Enrollment averages several frames into one template and de-duplicates repeats.
-7. **Sync & purge.** `SyncManager.syncAndPurge()` uploads embeddings to AWS and deletes local copies.
+   (threshold 0.45, calibrated on LFW — see [`benchmark/`](./benchmark/)). Enrollment averages
+   several frames into one template and de-duplicates repeats locally.
+7. **Sync, then purge.** `SyncManager.sync()` uploads embeddings to AWS, where the Lambda
+   de-duplicates against the datalake so re-enrolled people never create duplicate rows; local
+   copies are kept (marked synced) until you explicitly **Purge Local** them — two separate actions.
 
 ---
 
@@ -159,10 +172,11 @@ src/
   ml/             FaceRecognizer, FaceAntiSpoof, ImageProcessor
   recognition/    FrameQuality, CosineSimilarity
   storage/        OfflineStore (SecureStore)
-  sync/           SyncManager (AWS sync & purge)
+  sync/           SyncManager (AWS sync + on-demand local purge)
   theme/          design tokens
   utils/          config (tunable thresholds)
 assets/models/    mobilefacenet.tflite, minifasnet_v2.tflite
+aws/lambda/       sync backend (server-side dedup) — deploy-only, not part of the app build
 docs/             vision-camera-rebuild.md
 solution.md       design + evaluation write-up
 ```
