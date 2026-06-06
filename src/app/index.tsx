@@ -9,10 +9,16 @@ import { ActionCard, AppButton, Badge, Card, Screen, SectionLabel } from '../com
 export default function HomeScreen() {
   const router = useRouter();
   const [templateCount, setTemplateCount] = useState(0);
+  const [unsyncedCount, setUnsyncedCount] = useState(0);
+  const [syncedCount, setSyncedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
 
   const refresh = useCallback(() => {
-    OfflineStore.getTemplates().then((t) => setTemplateCount(t.length));
+    OfflineStore.getTemplates().then((t) => {
+      setTemplateCount(t.length);
+      setUnsyncedCount(t.filter((x) => !x.isSynced).length);
+      setSyncedCount(t.filter((x) => x.isSynced).length);
+    });
   }, []);
 
   useFocusEffect(
@@ -24,18 +30,44 @@ export default function HomeScreen() {
   const onSync = async () => {
     setSyncing(true);
     try {
-      const result = await SyncManager.syncAndPurge();
+      const result = await SyncManager.sync();
       refresh();
       if (result.error) {
         Alert.alert('Sync failed', result.error);
-      } else if (result.synced === 0) {
+      } else if (result.synced === 0 && !result.duplicates) {
         Alert.alert('Nothing to sync', 'No unsynced templates on this device.');
       } else {
-        Alert.alert('Sync complete', `${result.synced} template(s) uploaded to AWS and purged locally.`);
+        const dupLine = result.duplicates
+          ? `\n${result.duplicates} skipped — already in the datalake.`
+          : '';
+        Alert.alert(
+          'Sync complete',
+          `${result.synced} new template(s) uploaded to AWS.${dupLine}\n\nLocal copies kept — use "Purge Local" to remove synced ones.`
+        );
       }
     } finally {
       setSyncing(false);
     }
+  };
+
+  const onPurge = () => {
+    if (syncedCount === 0) return;
+    Alert.alert(
+      'Purge synced templates?',
+      `Deletes ${syncedCount} synced template(s) from this device. They remain in AWS. Unsynced templates are kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Purge',
+          style: 'destructive',
+          onPress: async () => {
+            const removed = await SyncManager.purgeLocal();
+            refresh();
+            Alert.alert('Purged', `${removed} synced template(s) removed from this device.`);
+          },
+        },
+      ]
+    );
   };
 
   const onClear = () => {
@@ -106,11 +138,19 @@ export default function HomeScreen() {
       {/* Data management */}
       <SectionLabel>Data</SectionLabel>
       <AppButton
-        title="Sync to AWS & Purge Local"
+        title={unsyncedCount > 0 ? `Sync to AWS (${unsyncedCount})` : 'Sync to AWS'}
         glyph="☁"
         variant="secondary"
         loading={syncing}
+        disabled={unsyncedCount === 0}
         onPress={onSync}
+      />
+      <AppButton
+        title={syncedCount > 0 ? `Purge Local Synced (${syncedCount})` : 'Purge Local Synced'}
+        glyph="⤓"
+        variant="secondary"
+        disabled={syncedCount === 0}
+        onPress={onPurge}
       />
       <AppButton
         title="Clear All Data"
@@ -120,7 +160,7 @@ export default function HomeScreen() {
         onPress={onClear}
       />
 
-      <Text style={styles.footer}>100% on-device · no network required · data purged after sync</Text>
+      <Text style={styles.footer}>100% on-device · no network required · sync de-dups in AWS · purge on demand</Text>
     </Screen>
   );
 }

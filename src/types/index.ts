@@ -34,6 +34,7 @@ export type AntiSpoofResult = {
 };
 
 export type SyncResult = {
-  synced: number;
+  synced: number; // newly inserted into the datalake
+  duplicates?: number; // skipped server-side because the person already exists
   error?: string;
 };

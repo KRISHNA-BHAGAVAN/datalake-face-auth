@@ -34,6 +34,41 @@ export class OfflineStore {
   }
 
   /**
+   * Marks a template as synced without removing it. Keeping the embedding
+   * locally lets enrollment dedup against already-synced people and keeps
+   * offline verify working. Purging is now a separate, explicit action.
+   */
+  static async markSynced(id: string): Promise<void> {
+    try {
+      const existing = await this.getTemplates();
+      const updated = existing.map((t) =>
+        t.id === id ? { ...t, isSynced: true } : t
+      );
+      await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Error marking template synced', e);
+      throw e;
+    }
+  }
+
+  /**
+   * Deletes only templates already synced to AWS. Unsynced templates are kept
+   * so a purge never loses data that hasn't reached the datalake yet.
+   */
+  static async purgeSynced(): Promise<number> {
+    try {
+      const existing = await this.getTemplates();
+      const remaining = existing.filter((t) => !t.isSynced);
+      const removed = existing.length - remaining.length;
+      await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(remaining));
+      return removed;
+    } catch (e) {
+      console.error('Error purging synced templates', e);
+      return 0;
+    }
+  }
+
+  /**
    * Deletes a template by ID
    */
   static async deleteTemplate(id: string): Promise<void> {
