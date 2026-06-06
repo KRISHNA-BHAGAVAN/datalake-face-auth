@@ -29,7 +29,7 @@ React Native** app — with the ability to **sync to AWS and purge locally** onc
 | Speed < 1 s | Liveness on the native frame stream; recognition decision = one embedding + a cosine scan. |
 | Accuracy > 95% | MobileFaceNet embeddings + ArcFace-style face alignment + quality gating + multi-frame enrollment. |
 | Liveness / anti-spoof | Active challenges (blink / smile / head-turn) **plus** a passive CNN anti-spoof backstop. |
-| Sync & purge | Upload unsynced templates to AWS, then delete the local copies. |
+| Sync & purge | Upload unsynced templates to AWS (server-side de-dup), then purge local copies on demand. |
 | Open-source only | MobileFaceNet, MiniFASNet, Google ML Kit on-device, VisionCamera, TFLite — all permissive licenses. |
 
 ---
@@ -70,12 +70,12 @@ React Native** app — with the ability to **sync to AWS and purge locally** onc
                                                                             ▼
                                                           ┌────────────────────────────────┐
                                                           │ Cosine match vs local templates │
-                                                          │ (SecureStore)  threshold 0.65   │
+                                                          │ (SecureStore)  threshold 0.45   │
                                                           └───────────────┬────────────────┘
                                                                           ▼
                                                           ┌────────────────────────────────┐
-                                                          │ SyncManager → AWS, then purge   │
-                                                          │ (when connectivity returns)     │
+                                                          │ SyncManager → AWS (server dedup)│
+                                                          │ then purge local on demand      │
                                                           └────────────────────────────────┘
 ```
 
@@ -138,7 +138,9 @@ performing real CNN inference for the security-critical steps.
    for verification, the probe embedding is matched against stored templates.
 
 8. **Matching** (`CosineSimilarity.ts`). Cosine similarity against locally stored templates with a
-   threshold of **0.65**. The on-screen percentage is exactly this similarity score.
+   threshold of **0.45**, calibrated on LFW via the FAR/FRR sweep in [`benchmark/`](./benchmark/)
+   (the earlier 0.65 rejected ~35% of genuine users for no security gain). The on-screen percentage
+   is exactly this similarity score.
 
 9. **Storage** (`OfflineStore.ts`). Templates persist in `expo-secure-store` (OS keystore-backed).
    Only the numeric embedding is stored — never the photograph.
@@ -190,8 +192,8 @@ Accuracy is pursued structurally rather than by a single threshold:
 - **Multi-frame enrollment averaging** — a template built from several good frames is far more
   stable than any single shot.
 - **Enrollment de-duplication** — if a person re-enrolls, they are recognized against existing
-  templates (cosine ≥ 0.62) and **no duplicate is added**, keeping the gallery clean and matching
-  reliable.
+  templates (cosine ≥ 0.42 locally) and **no duplicate is added**; the AWS sync Lambda repeats this
+  check server-side so a purged device can never create duplicate datalake rows.
 
 ### 5.6 Open-source only
 | Component | License |
@@ -215,11 +217,15 @@ machine with per-challenge timeouts, a real-face validity gate, and a **passive 
 backstop** against printed-photo and screen-replay attacks — all on-device.
 
 ### 6.2 Sync & purge (AWS)
-`SyncManager.syncAndPurge()` collects locally stored templates not yet marked synced, `POST`s the
-**embeddings only** (never images) to a configurable AWS endpoint (`API Gateway → Lambda`, set via
-`EXPO_PUBLIC_FACE_SYNC_API_URL` / optional API key), and **deletes each local copy on success**.
-With no network it is a no-op that leaves local data intact, so operations continue uninterrupted
-and reconcile when connectivity returns.
+Sync and purge are **two explicit actions**. `SyncManager.sync()` collects locally stored templates
+not yet marked synced and `POST`s the **embeddings only** (never images) to a configurable AWS
+Lambda Function URL (`EXPO_PUBLIC_FACE_SYNC_API_URL` / optional `x-api-key`). The Lambda
+(`aws/lambda/index.mjs`) **de-duplicates server-side** — each incoming embedding is cosine-compared
+against the datalake and skipped if it matches an existing person — so a device that has already
+purged its local copies can never create duplicate rows. On success the local templates are *marked
+synced* (kept for offline verify + dedup), and `SyncManager.purgeLocal()` removes the synced copies
+when the operator chooses. With no endpoint configured the app is fully offline: the Sync button
+shows a notice, nothing leaves the device, and local data is untouched.
 
 ---
 
@@ -253,9 +259,26 @@ ML-Kit implementation (`useFaceAuth`) is retained as a rollback path.
 | Recognition decision | One embedding inference + cosine scan — sub-second target |
 | Min device class | Android 8.0+ / iOS 12+, 3 GB RAM, no GPU |
 
-> Figures for embedding latency and accuracy should be finalized with on-device measurement on the
-> target mid-range handset and a labelled demographic test set; the architecture and tuning above
-> are built to land within the < 1 s and > 95% requirements.
+### Recognition accuracy (reproducible — see [`benchmark/`](./benchmark/))
+
+Measured on **LFW** through the *exact* app pipeline (same `mobilefacenet.tflite`, alignment, and
+quality gate; liveness excluded), 4,771 pairs / 10-fold protocol:
+
+| Metric | Value |
+|---|---|
+| LFW 10-fold accuracy | **96.75% ± 0.69%** (clears the >95% bar) |
+| ROC AUC | 0.982 |
+| Best-threshold accuracy | 96.86% (thr 0.373) |
+| TAR @ FAR=0.1% | 93.26% |
+| Accuracy @ app threshold 0.45 | 95.89% (FAR 0.09%, FRR 8.0%) |
+
+The threshold is exposed as a tunable operating point; `benchmark/` persists the full FAR/FRR sweep
+so judges can re-derive it. An Indian-demographic evaluation (folders + template-averaging) is
+documented alongside in `benchmark/README.md`.
+
+> Embedding **latency** on the target mid-range handset is the one figure still pending on-device
+> measurement; the architecture (single embedding + cosine scan, NNAPI/Core ML) is built for the
+> < 1 s budget.
 
 ---
 
@@ -266,11 +289,12 @@ ML-Kit implementation (`useFaceAuth`) is retained as a rollback path.
   a real-time frame stream.
 - **Feasibility (30):** single RN/Expo codebase, standard autolinked native modules, one hook to
   integrate, NNAPI/Core ML acceleration, and a verify path deliberately optimized to sub-second.
-- **Scalability & Sustainability (20):** embeddings-only sync-and-purge to AWS that degrades
-  gracefully offline; alignment + quality gating + multi-frame enrollment for robustness across
-  demographics and lighting.
-- **Presentation & Documentation (20):** this document, an annotated source tree, and the rebuild
-  guide (`docs/vision-camera-rebuild.md`).
+- **Scalability & Sustainability (20):** embeddings-only sync to AWS with **server-side
+  de-duplication** and on-demand purge that degrades gracefully offline; alignment + quality gating
+  + multi-frame enrollment for robustness across demographics and lighting.
+- **Presentation & Documentation (20):** this document, a reproducible benchmark harness
+  (`benchmark/`) with LFW + Indian results, the deployable sync Lambda (`aws/lambda/`), an annotated
+  source tree, and the rebuild guide (`docs/vision-camera-rebuild.md`).
 
 ---
 
@@ -279,10 +303,10 @@ ML-Kit implementation (`useFaceAuth`) is retained as a rollback path.
 - Local template store is a single secure-store blob with a linear cosine scan — excellent for the
   field-personnel scale of a single device; for very large galleries, move to an indexed store
   (e.g. SQLite) with an approximate-nearest-neighbour index.
-- Formal accuracy/latency benchmarking on the target handset and a labelled Indian-demographic,
-  mixed-lighting dataset is the recommended next validation step.
-- The AWS endpoint is a documented contract (`SyncManager`); the server-side Lambda/DynamoDB is
-  provisioned outside this prototype.
+- Accuracy is benchmarked (LFW 96.75%, plus an Indian-demographic set — see `benchmark/`);
+  on-device **latency** on the target handset remains the recommended next measurement.
+- The AWS sync Lambda (`aws/lambda/index.mjs`, server-side dedup) is provided and tested; DynamoDB
+  table provisioning + IAM are deploy-time steps documented in `aws/lambda/README.md`.
 
 ---
 
@@ -301,6 +325,8 @@ ML-Kit implementation (`useFaceAuth`) is retained as a rollback path.
 | Matching | `src/recognition/CosineSimilarity.ts` |
 | Local storage | `src/storage/OfflineStore.ts` |
 | Sync & purge | `src/sync/SyncManager.ts` |
+| Sync backend (server dedup) | `aws/lambda/index.mjs` |
+| Accuracy benchmark | `benchmark/` (LFW + Indian, threshold sweep) |
 | Tunable parameters | `src/utils/config.ts` |
 </content>
 </invoke>
