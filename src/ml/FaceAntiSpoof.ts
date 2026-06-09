@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import { loadTensorflowModel, TensorflowModelDelegate } from 'react-native-fast-tflite';
 import { config } from '../utils/config';
 import { AntiSpoofResult } from '../types';
+import { resolveTfliteAsset } from './ModelAsset';
 
 let antiSpoofModel: Awaited<ReturnType<typeof loadTensorflowModel>> | null = null;
 
@@ -17,8 +18,9 @@ export class FaceAntiSpoof {
     if (antiSpoofModel) return;
 
     const delegates: TensorflowModelDelegate[] = Platform.OS === 'ios' ? ['core-ml'] : ['nnapi'];
+    const modelSource = await resolveTfliteAsset(require('../../assets/models/minifasnet_v2.tflite'));
     antiSpoofModel = await loadTensorflowModel(
-      require('../../assets/models/minifasnet_v2.tflite'),
+      modelSource,
       delegates
     );
   }
