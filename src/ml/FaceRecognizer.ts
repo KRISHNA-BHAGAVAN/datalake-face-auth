@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { loadTensorflowModel, TensorflowModelDelegate } from 'react-native-fast-tflite';
+import { resolveTfliteAsset } from './ModelAsset';
 
 // We load the model as a singleton so it's only loaded once in memory
 let faceNetModel: any = null;
@@ -14,10 +15,10 @@ export class FaceRecognizer {
 
     try {
       console.log('Loading FaceRecognizer model...');
-      // Metro resolver should find the tflite file since it's added to assetExts
       const delegates: TensorflowModelDelegate[] = Platform.OS === 'ios' ? ['core-ml'] : ['nnapi'];
+      const modelSource = await resolveTfliteAsset(require('../../assets/models/mobilefacenet.tflite'));
       faceNetModel = await loadTensorflowModel(
-        require('../../assets/models/mobilefacenet.tflite'),
+        modelSource,
         delegates
       );
       console.log('FaceRecognizer model loaded successfully!');

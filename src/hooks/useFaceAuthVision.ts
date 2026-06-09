@@ -22,6 +22,9 @@ import { FaceLandmarkResult } from '../types';
 type AuthStatus = 'IDLE' | 'ENROLLING' | 'VERIFYING' | 'SUCCESS' | 'FAILED';
 type Facing = 'front' | 'back';
 
+const errorToMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 /**
  * VisionCamera-based face auth. Liveness runs on the real-time native frame stream
  * (face-detector output → no takePictureAsync, no JS JPEG decode). The heavy work
@@ -38,6 +41,8 @@ export function useFaceAuthVision() {
   const [confidence, setConfidence] = useState<number | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [facing, setFacing] = useState<Facing>('front');
+  const [modelsReady, setModelsReady] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
 
   const device = useCameraDevice(facing);
 
@@ -50,9 +55,26 @@ export function useFaceAuthVision() {
   }, [livenessState.status]);
 
   useEffect(() => {
-    Promise.all([FaceRecognizer.init(), FaceAntiSpoof.init()]).catch((e) =>
-      console.error('Failed to load ML models', e)
-    );
+    let cancelled = false;
+
+    Promise.all([FaceRecognizer.init(), FaceAntiSpoof.init()])
+      .then(() => {
+        if (!cancelled) {
+          setModelsReady(true);
+          setModelError(null);
+        }
+      })
+      .catch((e) => {
+        console.error('Failed to load ML models', e);
+        if (!cancelled) {
+          setModelsReady(false);
+          setModelError(errorToMessage(e));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const failAuth = useCallback((userMessage: string) => {
@@ -162,7 +184,7 @@ export function useFaceAuthVision() {
   // the first capture(s) the instant liveness passes can throw
   // "Not bound to a valid Camera" while the photo use-case is still binding
   // (the running frame-analysis pipeline delays it). Retry briefly.
-  const capturePhotoWithRetry = useCallback(async (attempts = 4, delayMs = 150) => {
+  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
     let lastErr: unknown;
     for (let a = 0; a < attempts; a++) {
       try {
@@ -176,18 +198,23 @@ export function useFaceAuthVision() {
   }, []);
 
   const captureEmbeddings = useCallback(async () => {
+    if (!modelsReady) {
+      throw new Error('Face models are still loading');
+    }
+
     const wanted =
       currentAction.current === 'VERIFY'
         ? config.recognition.verifyEmbeddings
         : config.recognition.enrollEmbeddings;
 
     // Give CameraX a moment to bind the photo use-case before the burst.
-    await sleep(120);
+    await sleep(300);
 
     const embeddings: number[][] = [];
     let spoofChecks = 0;
     let spoofFails = 0;
     let lastEmbedMs = 0;
+    let lastIssue: string | null = null;
 
     // Collect up to `wanted` GOOD embeddings, with a couple of spare attempts so a
     // single blurry/off-angle frame doesn't sink the whole burst. We stop as soon as
@@ -200,21 +227,40 @@ export function useFaceAuthVision() {
         const photo = await capturePhotoWithRetry();
         uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
       } catch (e) {
+        lastIssue = `photo capture failed: ${errorToMessage(e)}`;
         console.warn('capturePhotoToFile failed', e);
         continue;
       }
 
       // 'fast' is enough here: the face was already validated on the live stream,
       // and 'accurate' roughly doubles still-detect time.
-      const faces = await FaceDetection.detect(uri, {
-        performanceMode: 'fast',
-        landmarkMode: 'all', // eye positions for alignment
-        classificationMode: 'all',
-      });
-      if (!faces.length) continue;
+      let faces: Awaited<ReturnType<typeof FaceDetection.detect>>;
+      try {
+        faces = await FaceDetection.detect(uri, {
+          performanceMode: 'fast',
+          landmarkMode: 'all', // eye positions for alignment
+          classificationMode: 'all',
+        });
+      } catch (e) {
+        lastIssue = `still-face detection failed: ${errorToMessage(e)}`;
+        console.warn('still-face detection failed', e);
+        continue;
+      }
+      if (!faces.length) {
+        lastIssue = 'no face found in captured photo';
+        continue;
+      }
       const f = faces[0];
 
-      const { width, height } = await getImageSize(uri);
+      let width: number;
+      let height: number;
+      try {
+        ({ width, height } = await getImageSize(uri));
+      } catch (e) {
+        lastIssue = `captured photo could not be read: ${errorToMessage(e)}`;
+        console.warn('captured photo could not be read', e);
+        continue;
+      }
       const normBox = {
         x: f.frame.left / width,
         y: f.frame.top / height,
@@ -232,6 +278,7 @@ export function useFaceAuthVision() {
           spoofChecks += 1;
           if (!spoof.isLive) spoofFails += 1;
         } catch (e) {
+          lastIssue = `anti-spoof check failed: ${errorToMessage(e)}`;
           console.warn('anti-spoof failed', e);
         }
       }
@@ -241,7 +288,10 @@ export function useFaceAuthVision() {
         { frame: { width: f.frame.width }, rotationX: f.rotationX, rotationY: f.rotationY },
         width
       );
-      if (!geo.ok) continue;
+      if (!geo.ok) {
+        lastIssue = geo.reason;
+        continue;
+      }
 
       const lm = f.landmarks;
       const eyes =
@@ -250,19 +300,24 @@ export function useFaceAuthVision() {
           : null;
       try {
         const tensor = await ImageProcessor.processFaceImage(uri, width, height, normBox, eyes);
-        if (!FrameQuality.assessPixels(tensor.sharpness, tensor.brightness).ok) continue;
+        const pixelQuality = FrameQuality.assessPixels(tensor.sharpness, tensor.brightness);
+        if (!pixelQuality.ok) {
+          lastIssue = pixelQuality.reason;
+          continue;
+        }
         const t0 = Date.now();
         const emb = await FaceRecognizer.getEmbedding(tensor.input);
         lastEmbedMs = Date.now() - t0;
         embeddings.push(emb);
       } catch (e) {
+        lastIssue = `embedding failed: ${errorToMessage(e)}`;
         console.warn('embedding failed', e);
       }
     }
 
     const spoofed = spoofChecks > 0 && spoofFails >= Math.ceil(spoofChecks / 2);
-    return { embeddings, spoofed, lastEmbedMs };
-  }, [capturePhotoWithRetry]);
+    return { embeddings, spoofed, lastEmbedMs, lastIssue };
+  }, [capturePhotoWithRetry, modelsReady]);
 
   // Resolve the flow once liveness reaches a terminal state.
   useEffect(() => {
@@ -279,14 +334,18 @@ export function useFaceAuthVision() {
       setIsProcessing(true);
       const startedAt = Date.now();
       try {
-        const { embeddings, spoofed, lastEmbedMs } = await captureEmbeddings();
+        const { embeddings, spoofed, lastEmbedMs, lastIssue } = await captureEmbeddings();
 
         if (spoofed) {
           failAuth('Spoof detected. Use your real face, not a photo or screen.');
           return;
         }
         if (embeddings.length === 0) {
-          failAuth('Could not capture a clear face. Please try again.');
+          failAuth(
+            lastIssue
+              ? `Could not capture a clear face (${lastIssue}). Please try again.`
+              : 'Could not capture a clear face. Please try again.'
+          );
           return;
         }
 
@@ -357,6 +416,15 @@ export function useFaceAuthVision() {
   // --- Controls ------------------------------------------------------------
   const begin = useCallback(
     (action: 'ENROLL' | 'VERIFY', challenges: Parameters<typeof startLiveness>[0]) => {
+      if (modelError) {
+        failAuth(`Face engine failed to load: ${modelError}`);
+        return;
+      }
+      if (!modelsReady) {
+        setAuthStatus('IDLE');
+        setMessage('Preparing face engine...');
+        return;
+      }
       resolvingRef.current = false;
       currentAction.current = action;
       setAuthStatus(action === 'ENROLL' ? 'ENROLLING' : 'VERIFYING');
@@ -367,7 +435,7 @@ export function useFaceAuthVision() {
       resetLiveness();
       startLiveness(challenges);
     },
-    [resetLiveness, startLiveness]
+    [failAuth, modelError, modelsReady, resetLiveness, startLiveness]
   );
 
   const startEnrollment = useCallback(
@@ -400,6 +468,8 @@ export function useFaceAuthVision() {
     isProcessing,
     confidence,
     latencyMs,
+    modelsReady,
+    modelError,
     // camera
     device,
     hasPermission,
