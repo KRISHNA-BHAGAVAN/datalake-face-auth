@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Camera } from 'react-native-vision-camera';
@@ -27,6 +27,8 @@ export function CameraFlow({ mode }: Props) {
     isProcessing,
     confidence,
     latencyMs,
+    modelsReady,
+    modelError,
     device,
     hasPermission,
     requestPermission,
@@ -41,14 +43,19 @@ export function CameraFlow({ mode }: Props) {
   } = useFaceAuthVision();
 
   const start = mode === 'ENROLL' ? startEnrollment : startVerification;
+  const startedRef = useRef(false);
 
-  // Start once on mount; reset on unmount. Empty deps so the liveness challenge
-  // sequence is not restarted on every render.
+  // Reset on unmount. The flow itself starts only after the native camera and
+  // ML models are ready, so the liveness timeout does not run during startup.
   useEffect(() => {
-    start();
     return () => reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reset]);
+
+  useEffect(() => {
+    if (startedRef.current || !hasPermission || !device || !modelsReady || modelError) return;
+    startedRef.current = true;
+    start();
+  }, [device, hasPermission, modelError, modelsReady, start]);
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
@@ -82,6 +89,16 @@ export function CameraFlow({ mode }: Props) {
               <Text style={styles.infoText}>No {facing} camera available</Text>
             </>
           )}
+        </View>
+      )}
+
+      {hasPermission && device && (!modelsReady || modelError) && (
+        <View style={[StyleSheet.absoluteFill, styles.center]}>
+          {!modelError && <ActivityIndicator color={colors.primary} />}
+          <Text style={styles.infoText}>
+            {modelError ? 'Face engine failed to load' : 'Preparing face engine...'}
+          </Text>
+          {modelError && <Text style={styles.errorDetail}>{modelError}</Text>}
         </View>
       )}
 
@@ -121,6 +138,7 @@ export function CameraFlow({ mode }: Props) {
           threshold={config.recognition.cosineSimilarityThreshold}
           onRetry={() => {
             reset();
+            startedRef.current = true;
             start();
           }}
           onDone={() => router.back()}
@@ -151,6 +169,13 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   processingText: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  errorDetail: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
+    paddingHorizontal: spacing.lg,
+  },
   flipBtn: {
     position: 'absolute',
     top: spacing.lg,
