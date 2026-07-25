@@ -1,41 +1,38 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, radius, spacing } from '../../theme';
+import { colors, radius, spacing, type } from '../../theme';
+import { Icon, IconName } from './Icon';
 
 interface Props {
-  /** Small caps label above the value, e.g. "SPEED". */
   label: string;
   value: string;
-  tone?: 'default' | 'primary' | 'success';
+  icon?: IconName;
 }
 
-const valueColor = {
-  default: colors.text,
-  primary: colors.primary,
-  success: colors.success,
-};
-
-/** Compact label/value chip used for benchmark + result metrics. */
-export function StatChip({ label, value, tone = 'default' }: Props) {
+/**
+ * Compact metric tile for side-by-side specs. Label first, value second — the
+ * label anchors the reading order, the tabular value carries the weight.
+ */
+export function StatChip({ label, value, icon }: Props) {
   return (
-    <View style={styles.chip}>
-      <Text style={styles.label}>{label}</Text>
-      <Text style={[styles.value, { color: valueColor[tone] }]}>{value}</Text>
+    <View style={styles.tile}>
+      {icon && <Icon name={icon} size="md" color={colors.textTertiary} />}
+      <Text style={type.fieldLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={type.metricSm}>{value}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  chip: {
+  tile: {
     flex: 1,
-    backgroundColor: colors.bgElevated,
+    minWidth: 92,
+    backgroundColor: colors.surfaceSunken,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.hairlineSoft,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.md,
-    gap: 4,
+    gap: spacing.xs,
   },
-  label: { fontSize: 10, fontWeight: '700', letterSpacing: 1, color: colors.textMuted },
-  value: { fontSize: 18, fontWeight: '800' },
 });

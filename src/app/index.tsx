@@ -1,10 +1,19 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { OfflineStore } from '../storage/OfflineStore';
 import { SyncManager } from '../sync/SyncManager';
 import { colors, spacing, type } from '../theme';
-import { ActionCard, AppButton, Badge, Card, Screen, SectionLabel } from '../components/ui';
+import {
+  ActionCard,
+  Card,
+  DataRow,
+  IconButton,
+  ListGroup,
+  ListRow,
+  Screen,
+  SectionLabel,
+} from '../components/ui';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -35,14 +44,14 @@ export default function HomeScreen() {
       if (result.error) {
         Alert.alert('Sync failed', result.error);
       } else if (result.synced === 0 && !result.duplicates) {
-        Alert.alert('Nothing to sync', 'No unsynced templates on this device.');
+        Alert.alert('Nothing to sync', 'Every template on this device is already uploaded.');
       } else {
-        const dupLine = result.duplicates
-          ? `\n${result.duplicates} skipped — already in the datalake.`
+        const duplicates = result.duplicates
+          ? `\n${result.duplicates} already existed and were skipped.`
           : '';
         Alert.alert(
           'Sync complete',
-          `${result.synced} new template(s) uploaded to AWS.${dupLine}\n\nLocal copies kept — use "Purge Local" to remove synced ones.`
+          `${result.synced} uploaded.${duplicates}\n\nLocal copies are kept until you remove them.`
         );
       }
     } finally {
@@ -50,139 +59,147 @@ export default function HomeScreen() {
     }
   };
 
-  const onPurge = () => {
-    if (syncedCount === 0) return;
+  const onRemoveSynced = () => {
     Alert.alert(
-      'Purge synced templates?',
-      `Deletes ${syncedCount} synced template(s) from this device. They remain in AWS. Unsynced templates are kept.`,
+      'Remove synced copies?',
+      `${syncedCount} template${syncedCount === 1 ? '' : 's'} will be deleted from this device. They stay in the cloud. Templates not yet uploaded are kept.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Purge',
+          text: 'Remove',
           style: 'destructive',
           onPress: async () => {
             const removed = await SyncManager.purgeLocal();
             refresh();
-            Alert.alert('Purged', `${removed} synced template(s) removed from this device.`);
+            Alert.alert('Removed', `${removed} template${removed === 1 ? '' : 's'} deleted from this device.`);
           },
         },
       ]
     );
   };
 
-  const onClear = () => {
-    if (templateCount === 0) return;
-    Alert.alert('Clear all data?', 'This permanently deletes every enrolled face template on this device.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await OfflineStore.clearAll();
-          setTemplateCount(0);
+  const onDeleteAll = () => {
+    Alert.alert(
+      'Delete all templates?',
+      'Every enrolled face on this device is permanently deleted. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await OfflineStore.clearAll();
+            refresh();
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
+
+  const isEmpty = templateCount === 0;
 
   return (
     <Screen scroll contentStyle={styles.content}>
-      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.brandRow}>
-          <View style={styles.logo}>
-            <Text style={styles.logoGlyph}>◈</Text>
-          </View>
-          <Pressable style={styles.about} onPress={() => router.push('/about' as any)}>
-            <Text style={styles.aboutText}>About ›</Text>
-          </Pressable>
+        <View style={styles.headerText}>
+          <Text style={type.display}>Face Auth</Text>
+          <Text style={type.secondary}>Offline biometric attendance</Text>
         </View>
-        <Text style={type.display}>Datalake Face Auth</Text>
-        <Text style={type.secondary}>Offline biometric attendance for field personnel</Text>
-        <View style={styles.badges}>
-          <Badge label="OFFLINE READY" tone="success" />
-          <Badge label="ON-DEVICE AI" tone="primary" />
-        </View>
+        <IconButton
+          name="info"
+          accessibilityLabel="About this app"
+          onPress={() => router.push('/about' as any)}
+        />
       </View>
 
-      {/* Enrolled stat */}
-      <Card tone="primary" style={styles.statCard}>
-        <View>
-          <Text style={type.label}>Enrolled Templates</Text>
-          <Text style={type.metric}>{templateCount}</Text>
-        </View>
-        <View style={styles.statSide}>
-          <Text style={styles.statSideValue}>{templateCount === 0 ? 'Empty' : 'Ready'}</Text>
-          <Text style={type.secondary}>Stored encrypted on device</Text>
+      <Card>
+        <Text style={type.fieldLabel}>Enrolled on this device</Text>
+        <Text style={type.metric}>{templateCount}</Text>
+        <View style={styles.breakdown}>
+          {isEmpty ? (
+            <Text style={type.caption}>No faces enrolled yet</Text>
+          ) : (
+            <>
+              <DataRow label="Uploaded" value={String(syncedCount)} />
+              <DataRow label="Pending upload" value={String(unsyncedCount)} />
+            </>
+          )}
         </View>
       </Card>
 
-      {/* Primary actions */}
       <SectionLabel>Authenticate</SectionLabel>
-      <ActionCard
-        glyph="＋"
-        title="Enroll New Face"
-        subtitle="Capture a template with liveness checks"
-        tone="primary"
-        onPress={() => router.push('/enroll' as any)}
-      />
-      <ActionCard
-        glyph="⛨"
-        title="Verify Face"
-        subtitle={templateCount === 0 ? 'Enroll a face first' : 'Match against enrolled templates'}
-        tone="success"
-        disabled={templateCount === 0}
-        onPress={() => router.push('/verify' as any)}
-      />
+      <View style={styles.actions}>
+        <ActionCard
+          icon="enroll"
+          title="Enroll a face"
+          subtitle="Capture a new template with liveness checks"
+          emphasis={isEmpty ? 'filled' : 'outlined'}
+          onPress={() => router.push('/enroll' as any)}
+        />
+        <ActionCard
+          icon="verify"
+          title="Verify a face"
+          subtitle={isEmpty ? 'Enroll a face to enable this' : 'Match against enrolled templates'}
+          emphasis={isEmpty ? 'outlined' : 'filled'}
+          disabled={isEmpty}
+          onPress={() => router.push('/verify' as any)}
+        />
+      </View>
 
-      {/* Data management */}
-      <SectionLabel>Data</SectionLabel>
-      <AppButton
-        title={unsyncedCount > 0 ? `Sync to AWS (${unsyncedCount})` : 'Sync to AWS'}
-        glyph="☁"
-        variant="secondary"
-        loading={syncing}
-        disabled={unsyncedCount === 0}
-        onPress={onSync}
-      />
-      <AppButton
-        title={syncedCount > 0 ? `Purge Local Synced (${syncedCount})` : 'Purge Local Synced'}
-        glyph="⤓"
-        variant="secondary"
-        disabled={syncedCount === 0}
-        onPress={onPurge}
-      />
-      <AppButton
-        title="Clear All Data"
-        glyph="🗑"
-        variant="danger"
-        disabled={templateCount === 0}
-        onPress={onClear}
-      />
-
-      <Text style={styles.footer}>100% on-device · no network required · sync de-dups in AWS · purge on demand</Text>
+      <SectionLabel>Templates</SectionLabel>
+      <ListGroup>
+        <ListRow
+          icon="upload"
+          title="Upload to cloud"
+          subtitle={
+            unsyncedCount === 0 ? 'Nothing pending' : 'Sends templates that are not yet uploaded'
+          }
+          badge={unsyncedCount > 0 ? String(unsyncedCount) : undefined}
+          loading={syncing}
+          disabled={unsyncedCount === 0}
+          onPress={onSync}
+          hideChevron
+        />
+        <ListRow
+          icon="removeLocal"
+          title="Remove synced copies"
+          subtitle={
+            syncedCount === 0 ? 'Nothing uploaded yet' : 'Frees local storage, keeps the cloud copy'
+          }
+          value={syncedCount > 0 ? String(syncedCount) : undefined}
+          disabled={syncedCount === 0}
+          onPress={onRemoveSynced}
+          hideChevron
+        />
+        <ListRow
+          icon="delete"
+          title="Delete all templates"
+          subtitle="Permanently erases every face on this device"
+          destructive
+          disabled={isEmpty}
+          onPress={onDeleteAll}
+          hideChevron
+        />
+      </ListGroup>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingTop: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
-  header: { gap: spacing.sm },
-  brandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
-  logo: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: colors.primaryDim,
-    alignItems: 'center',
-    justifyContent: 'center',
+  content: { paddingTop: spacing.md, paddingBottom: spacing.huge },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginBottom: spacing.xxl,
   },
-  logoGlyph: { color: colors.primary, fontSize: 22, fontWeight: '800' },
-  about: { paddingVertical: spacing.xs, paddingHorizontal: spacing.sm },
-  aboutText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
-  badges: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  statCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.sm },
-  statSide: { alignItems: 'flex-end', maxWidth: '50%' },
-  statSideValue: { color: colors.success, fontSize: 16, fontWeight: '800', marginBottom: 2 },
-  footer: { color: colors.textMuted, fontSize: 12, textAlign: 'center', marginTop: spacing.lg, lineHeight: 18 },
+  headerText: { flex: 1, gap: spacing.xs },
+  breakdown: {
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  actions: { gap: spacing.md },
 });

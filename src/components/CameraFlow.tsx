@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Camera } from 'react-native-vision-camera';
 import { useFaceAuthVision } from '../hooks/useFaceAuthVision';
 import { config } from '../utils/config';
-import { colors, radius, spacing } from '../theme';
+import { colors, radius, spacing, type } from '../theme';
 import { AppButton } from './ui/AppButton';
+import { Icon, IconName } from './ui/Icon';
+import { IconButton } from './ui/IconButton';
 import { ChallengeCard } from './ChallengeCard';
 import { ScanOverlay } from './ScanOverlay';
 import { ResultOverlay } from './ResultOverlay';
@@ -17,7 +20,7 @@ interface Props {
 // Must match the challenge lists started in useFaceAuthVision (enroll: 3, verify: 1).
 const TOTAL_CHALLENGES = { ENROLL: 3, VERIFY: 1 } as const;
 
-/** Shared VisionCamera-based experience for enrollment and verification. */
+/** Shared VisionCamera experience for enrollment and verification. */
 export function CameraFlow({ mode }: Props) {
   const router = useRouter();
   const {
@@ -25,6 +28,7 @@ export function CameraFlow({ mode }: Props) {
     authStatus,
     message,
     isProcessing,
+    subscribeCapture,
     confidence,
     latencyMs,
     modelsReady,
@@ -65,67 +69,99 @@ export function CameraFlow({ mode }: Props) {
 
   const done = authStatus === 'SUCCESS' || authStatus === 'FAILED';
   const livenessStatus = livenessState.status;
-  const accent =
-    livenessStatus === 'PASSED' ? colors.success : livenessStatus === 'FAILED' ? colors.danger : colors.primary;
-  const scanning = !done && livenessStatus !== 'PASSED' && livenessStatus !== 'FAILED';
+  const resolved =
+    livenessStatus === 'PASSED' ? 'success' : livenessStatus === 'FAILED' ? 'danger' : null;
+  const scanning = !done && resolved === null;
+  const cameraReady = hasPermission && device && modelsReady && !modelError;
 
   const resultTitle =
-    authStatus === 'SUCCESS' ? (mode === 'ENROLL' ? 'Enrolled' : 'Verified') : 'Not Verified';
+    authStatus === 'SUCCESS' ? (mode === 'ENROLL' ? 'Enrolled' : 'Verified') : 'Not verified';
 
   return (
     <View style={styles.container}>
       {hasPermission && device ? (
-        <Camera style={StyleSheet.absoluteFill} device={device} isActive={isActive} outputs={outputs} />
-      ) : (
-        <View style={[StyleSheet.absoluteFill, styles.center]}>
+        <Camera
+          style={StyleSheet.absoluteFill}
+          device={device}
+          isActive={isActive}
+          outputs={outputs}
+        />
+      ) : null}
+
+      {cameraReady && (
+        <ScanOverlay
+          resolved={resolved}
+          scanning={scanning}
+          subscribeCapture={subscribeCapture}
+        />
+      )}
+
+      {/* Blocking states get the canvas rather than a dark scrim, so the whole
+          app reads as one light surface. */}
+      {!cameraReady && (
+        <View style={[StyleSheet.absoluteFill, styles.blocking]}>
           {!hasPermission ? (
-            <>
-              <Text style={styles.infoText}>Camera permission needed</Text>
-              <AppButton title="Grant Permission" onPress={requestPermission} />
-            </>
+            <Gate
+              icon="camera"
+              title="Camera access needed"
+              body="Face authentication runs entirely on this device. The camera feed is never uploaded."
+              action={<AppButton title="Allow camera access" onPress={requestPermission} />}
+            />
+          ) : !device ? (
+            <Gate
+              icon="flipCamera"
+              title="No camera available"
+              body={`This device has no ${facing} camera. Try the other one.`}
+              action={
+                <AppButton
+                  title={`Use the ${facing === 'front' ? 'back' : 'front'} camera`}
+                  variant="secondary"
+                  onPress={toggleFacing}
+                />
+              }
+            />
+          ) : modelError ? (
+            /* No action: nothing here is retryable, and Cancel is already
+               reachable in the corner. */
+            <Gate icon="antiSpoof" tone="danger" title="Face engine unavailable" body={modelError} />
           ) : (
-            <>
+            <View style={styles.loading}>
               <ActivityIndicator color={colors.primary} />
-              <Text style={styles.infoText}>No {facing} camera available</Text>
-            </>
+              <Text style={type.secondary}>Preparing face engine</Text>
+            </View>
           )}
         </View>
       )}
 
-      {hasPermission && device && (!modelsReady || modelError) && (
-        <View style={[StyleSheet.absoluteFill, styles.center]}>
-          {!modelError && <ActivityIndicator color={colors.primary} />}
-          <Text style={styles.infoText}>
-            {modelError ? 'Face engine failed to load' : 'Preparing face engine...'}
-          </Text>
-          {modelError && <Text style={styles.errorDetail}>{modelError}</Text>}
-        </View>
-      )}
-
-      <ScanOverlay accent={accent} scanning={scanning} />
-
+      {/* Controls pin to the top, the instruction card to the bottom, with a
+          flexible spacer between — the face frame occupies the middle and
+          nothing can overlap it regardless of card height or device size. */}
       {!done && (
-        <Pressable
-          style={({ pressed }) => [styles.flipBtn, pressed && styles.flipPressed]}
-          hitSlop={10}
-          onPress={toggleFacing}
-        >
-          <Text style={styles.flipGlyph}>⟲</Text>
-          <Text style={styles.flipLabel}>{facing === 'front' ? 'Front' : 'Back'}</Text>
-        </Pressable>
-      )}
+        <SafeAreaView style={styles.chrome} edges={['top', 'bottom']} pointerEvents="box-none">
+          <View style={styles.controls} pointerEvents="box-none">
+            <IconButton
+              name="close"
+              accessibilityLabel="Cancel and go back"
+              variant="floating"
+              onPress={() => router.back()}
+            />
+            {cameraReady && <FlipCameraButton facing={facing} onPress={toggleFacing} />}
+          </View>
 
-      {!done && (
-        <View style={styles.top} pointerEvents="none">
-          <ChallengeCard state={livenessState} total={TOTAL_CHALLENGES[mode]} />
-        </View>
-      )}
+          <View style={styles.spacer} pointerEvents="none" />
 
-      {!done && isProcessing && (
-        <View style={styles.processing} pointerEvents="none">
-          <ActivityIndicator color={colors.primary} />
-          <Text style={styles.processingText}>Verifying…</Text>
-        </View>
+          {cameraReady && (
+            <View style={styles.prompt} pointerEvents="none">
+              <ChallengeCard
+                state={livenessState}
+                message={message}
+                total={TOTAL_CHALLENGES[mode]}
+                processing={isProcessing}
+                subscribeCapture={subscribeCapture}
+              />
+            </View>
+          )}
+        </SafeAreaView>
       )}
 
       {done && (
@@ -148,49 +184,110 @@ export function CameraFlow({ mode }: Props) {
   );
 }
 
+/** Flip-camera control that spins a half turn on every press — a tactile echo
+ * of the action, not just an instant facing swap. Turns accumulate, so a rapid
+ * double-tap keeps spinning forward rather than snapping back. */
+function FlipCameraButton({
+  facing,
+  onPress,
+}: {
+  facing: 'front' | 'back';
+  onPress: () => void;
+}) {
+  const spin = useRef(new Animated.Value(0)).current;
+  const turns = useRef(0);
+
+  const handlePress = () => {
+    turns.current += 1;
+    Animated.spring(spin, {
+      toValue: turns.current,
+      friction: 7,
+      tension: 55,
+      useNativeDriver: true,
+    }).start();
+    onPress();
+  };
+
+  // Extrapolates linearly past the [0,1] pair, so each additional turn keeps
+  // adding another 180deg rather than wrapping back to the start.
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
+
+  return (
+    <Animated.View style={{ transform: [{ rotate }] }}>
+      <IconButton
+        name="flipCamera"
+        accessibilityLabel={`Switch to ${facing === 'front' ? 'back' : 'front'} camera`}
+        variant="floating"
+        onPress={handlePress}
+      />
+    </Animated.View>
+  );
+}
+
+/** Permission / failure state: explain, then offer the one useful action. */
+function Gate({
+  icon,
+  title,
+  body,
+  tone = 'accent',
+  action,
+}: {
+  icon: IconName;
+  title: string;
+  body: string;
+  tone?: 'accent' | 'danger';
+  action?: React.ReactNode;
+}) {
+  const danger = tone === 'danger';
+  return (
+    <View style={styles.gate}>
+      <View
+        style={[
+          styles.gateIcon,
+          { backgroundColor: danger ? colors.dangerSoft : colors.primarySoft },
+        ]}
+      >
+        <Icon name={icon} size="xl" color={danger ? colors.danger : colors.primary} />
+      </View>
+      <Text style={[type.title, styles.centered]} accessibilityRole="header">
+        {title}
+      </Text>
+      <Text style={[type.secondary, styles.centered]}>{body}</Text>
+      {action && <View style={styles.gateAction}>{action}</View>}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  center: { justifyContent: 'center', alignItems: 'center', gap: spacing.lg, padding: spacing.xl },
-  infoText: { color: colors.text, fontSize: 16, fontWeight: '600', textAlign: 'center' },
-  top: { position: 'absolute', top: spacing.xxxl, left: spacing.lg, right: spacing.lg, zIndex: 20 },
-  processing: {
-    position: 'absolute',
-    bottom: spacing.xxxl,
-    alignSelf: 'center',
-    flexDirection: 'row',
+  container: { flex: 1, backgroundColor: colors.canvas },
+  blocking: { backgroundColor: colors.canvas, zIndex: 30 },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md },
+  gate: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.surfaceTranslucent,
-    borderColor: colors.hairline,
-    borderWidth: 1,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    gap: spacing.md,
+    paddingHorizontal: spacing.xxl,
+  },
+  gateIcon: {
+    width: 64,
+    height: 64,
     borderRadius: radius.pill,
-    zIndex: 20,
-  },
-  processingText: { color: colors.text, fontSize: 14, fontWeight: '600' },
-  errorDetail: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 18,
-    paddingHorizontal: spacing.lg,
-  },
-  flipBtn: {
-    position: 'absolute',
-    top: spacing.lg,
-    right: spacing.lg,
     alignItems: 'center',
-    gap: 2,
-    backgroundColor: colors.surfaceTranslucent,
-    borderColor: colors.hairline,
-    borderWidth: 1,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    zIndex: 25,
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
   },
-  flipPressed: { opacity: 0.7 },
-  flipGlyph: { color: colors.primary, fontSize: 20, fontWeight: '700' },
-  flipLabel: { color: colors.textSecondary, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  gateAction: { alignSelf: 'stretch', marginTop: spacing.lg },
+  centered: { textAlign: 'center' },
+  // Above the blocking layer: Cancel must stay reachable while models load.
+  chrome: { ...StyleSheet.absoluteFill, zIndex: 35 },
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  spacer: { flex: 1 },
+  // Sits in the clear band below the face frame.
+  prompt: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
 });

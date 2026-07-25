@@ -1,8 +1,12 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
-import { colors, radius, spacing } from '../theme';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors, motion, radius, spacing, type } from '../theme';
+import { config } from '../utils/config';
 import { AppButton } from './ui/AppButton';
-import { StatChip } from './ui/StatChip';
+import { Card } from './ui/Card';
+import { DataRow } from './ui/List';
+import { Icon } from './ui/Icon';
 import { ConfidenceMeter } from './ConfidenceMeter';
 
 interface Props {
@@ -18,107 +22,100 @@ interface Props {
   onDone: () => void;
 }
 
-/** Full-screen result: animated ✓/✗ badge, optional confidence + speed metrics. */
+/**
+ * Result sheet covering the preview. Outcome first, then evidence, then the way
+ * out — with the actions pinned to the bottom so the thumb always lands in the
+ * same place whether or not metrics are shown.
+ */
 export function ResultOverlay({
   status,
   title,
   message,
   confidence,
-  threshold = 0.65,
+  threshold = config.recognition.cosineSimilarityThreshold,
   latencyMs,
   onRetry,
   onDone,
 }: Props) {
-  const pop = useRef(new Animated.Value(0)).current;
+  const enter = useRef(new Animated.Value(0)).current;
   const success = status === 'SUCCESS';
   const accent = success ? colors.success : colors.danger;
 
   useEffect(() => {
-    Animated.spring(pop, { toValue: 1, friction: 6, tension: 80, useNativeDriver: true }).start();
-  }, [pop]);
+    Animated.timing(enter, {
+      toValue: 1,
+      duration: motion.base,
+      useNativeDriver: true,
+    }).start();
+  }, [enter]);
 
-  const scale = pop.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
-
-  const showMetrics = confidence != null;
-  const underSecond = latencyMs != null && latencyMs <= 1000;
+  const translateY = enter.interpolate({ inputRange: [0, 1], outputRange: [12, 0] });
 
   return (
     <View style={styles.overlay}>
-      <Animated.View style={[styles.badge, { borderColor: accent, transform: [{ scale }] }]}>
-        <Text style={[styles.badgeGlyph, { color: accent }]}>{success ? '✓' : '✕'}</Text>
-      </Animated.View>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <Animated.View style={[styles.body, { opacity: enter, transform: [{ translateY }] }]}>
+          <View
+            style={[
+              styles.statusIcon,
+              { backgroundColor: success ? colors.successSoft : colors.dangerSoft },
+            ]}
+          >
+            <Icon name={success ? 'check' : 'close'} size="xl" color={accent} />
+          </View>
 
-      <Text style={styles.title}>{title}</Text>
-      <Text style={styles.message}>{message}</Text>
+          <View style={styles.copy}>
+            <Text style={[type.title, { color: accent, textAlign: 'center' }]} accessibilityRole="header">
+              {title}
+            </Text>
+            <Text style={[type.secondary, styles.message]}>{message}</Text>
+          </View>
 
-      {showMetrics && (
-        <View style={styles.metrics}>
-          <ConfidenceMeter value={confidence as number} threshold={threshold} />
-          {latencyMs != null && (
-            <View style={styles.chips}>
-              <StatChip
-                label="SPEED"
-                value={`${(latencyMs / 1000).toFixed(2)}s`}
-                tone={underSecond ? 'success' : 'default'}
-              />
-              <StatChip label="MODE" value="Offline" tone="primary" />
-            </View>
+          {confidence != null && (
+            <Card style={styles.metrics}>
+              <ConfidenceMeter value={confidence} threshold={threshold} />
+              {latencyMs != null && (
+                <>
+                  <View style={styles.divider} />
+                  <DataRow label="Recognition time" value={`${(latencyMs / 1000).toFixed(2)}s`} />
+                </>
+              )}
+            </Card>
           )}
-          {underSecond && <Text style={styles.fast}>⚡ Under the 1-second target</Text>}
-        </View>
-      )}
+        </Animated.View>
 
-      <View style={styles.actions}>
-        {!success && onRetry && <AppButton title="Try Again" glyph="↻" onPress={onRetry} />}
-        <AppButton
-          title="Done"
-          variant={success ? 'primary' : 'secondary'}
-          onPress={onDone}
-        />
-      </View>
+        <View style={styles.actions}>
+          {!success && onRetry && <AppButton title="Try again" icon="retry" onPress={onRetry} />}
+          <AppButton title="Done" variant={success ? 'primary' : 'secondary'} onPress={onDone} />
+        </View>
+      </SafeAreaView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   overlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(6, 9, 14, 0.94)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: spacing.xl,
-    gap: spacing.lg,
+    ...StyleSheet.absoluteFill,
+    backgroundColor: colors.overlayScrim,
     zIndex: 40,
   },
-  badge: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    borderWidth: 3,
+  safe: { flex: 1, paddingHorizontal: spacing.lg },
+  body: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.xl,
+  },
+  statusIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.sm,
   },
-  badgeGlyph: { fontSize: 52, fontWeight: '800', lineHeight: 58 },
-  title: { fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center' },
-  message: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 21,
-  },
-  metrics: {
-    width: '100%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.lg,
-    marginTop: spacing.sm,
-  },
-  chips: { flexDirection: 'row', gap: spacing.md },
-  fast: { fontSize: 13, fontWeight: '700', color: colors.success, textAlign: 'center' },
-  actions: { width: '100%', gap: spacing.md, marginTop: spacing.sm },
+  copy: { gap: spacing.xs, alignItems: 'center' },
+  message: { textAlign: 'center', maxWidth: 320 },
+  metrics: { alignSelf: 'stretch', gap: spacing.lg },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  actions: { gap: spacing.md, paddingBottom: spacing.lg },
 });
