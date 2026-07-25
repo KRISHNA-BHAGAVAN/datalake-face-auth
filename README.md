@@ -153,7 +153,7 @@ Tunable thresholds (liveness, anti-spoof, recognition, quality, alignment) live 
 4. **Align + preprocess.** Eye-landmark alignment to the ArcFace canonical geometry → 112×112 crop.
 5. **Anti-spoof.** MiniFASNet V2 classifies live vs photo/screen (once per flow).
 6. **Recognize + match.** MobileFaceNet embedding → cosine similarity against local templates
-   (threshold 0.45, calibrated on LFW — see [`benchmark/`](./benchmark/)). Enrollment averages
+   (threshold 0.48, calibrated on LFW — see [`benchmark/`](./benchmark/)). Enrollment averages
    several frames into one template and de-duplicates repeats locally.
 7. **Sync, then purge.** `SyncManager.sync()` uploads embeddings to AWS, where the Lambda
    de-duplicates against the datalake so re-enrolled people never create duplicate rows; local

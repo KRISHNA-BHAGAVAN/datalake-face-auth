@@ -1,27 +1,61 @@
 import React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
-import { colors, radius, spacing } from '../../theme';
+import { colors, hitTarget, radius, spacing, type } from '../../theme';
+import { Icon, IconName } from './Icon';
 
-type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
+type Variant = 'primary' | 'secondary' | 'destructive' | 'ghost';
 
 interface Props {
   title: string;
   onPress?: () => void;
   variant?: Variant;
-  /** Optional leading glyph (emoji / single char) to avoid icon-font deps. */
-  glyph?: string;
+  icon?: IconName;
   disabled?: boolean;
   loading?: boolean;
+  /** Screen-reader label when the title alone is ambiguous. */
+  accessibilityLabel?: string;
   style?: ViewStyle;
 }
 
+const VARIANTS: Record<Variant, { bg: string; fg: string; border: string; pressedBg: string }> = {
+  primary: {
+    bg: colors.primary,
+    fg: colors.onPrimary,
+    border: colors.primary,
+    pressedBg: colors.primaryHover,
+  },
+  secondary: {
+    bg: colors.surface,
+    fg: colors.text,
+    border: colors.borderStrong,
+    pressedBg: colors.surfacePressed,
+  },
+  destructive: {
+    bg: colors.surface,
+    fg: colors.danger,
+    border: colors.dangerBorder,
+    pressedBg: colors.dangerSoft,
+  },
+  ghost: {
+    bg: 'transparent',
+    fg: colors.primary,
+    border: 'transparent',
+    pressedBg: colors.primarySoft,
+  },
+};
+
+/**
+ * Pressed feedback is a background change rather than a transform, so the
+ * button never shifts the layout around it.
+ */
 export function AppButton({
   title,
   onPress,
   variant = 'primary',
-  glyph,
+  icon,
   disabled,
   loading,
+  accessibilityLabel,
   style,
 }: Props) {
   const v = VARIANTS[variant];
@@ -31,45 +65,42 @@ export function AppButton({
     <Pressable
       onPress={onPress}
       disabled={isDisabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityState={{ disabled: !!isDisabled, busy: !!loading }}
+      android_ripple={{ color: colors.border }}
       style={({ pressed }) => [
         styles.base,
         { backgroundColor: v.bg, borderColor: v.border },
-        pressed && !isDisabled && styles.pressed,
+        pressed && !isDisabled && { backgroundColor: v.pressedBg },
         isDisabled && styles.disabled,
         style,
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={v.fg} />
+        <ActivityIndicator color={v.fg} size="small" />
       ) : (
         <View style={styles.row}>
-          {glyph ? <Text style={[styles.glyph, { color: v.fg }]}>{glyph}</Text> : null}
-          <Text style={[styles.title, { color: v.fg }]}>{title}</Text>
+          {icon && <Icon name={icon} size="md" color={v.fg} />}
+          <Text style={[type.bodyStrong, { color: v.fg }]} numberOfLines={1}>
+            {title}
+          </Text>
         </View>
       )}
     </Pressable>
   );
 }
 
-const VARIANTS: Record<Variant, { bg: string; fg: string; border: string }> = {
-  primary: { bg: colors.primary, fg: colors.onPrimary, border: colors.primary },
-  secondary: { bg: colors.surface, fg: colors.text, border: colors.hairline },
-  danger: { bg: colors.dangerDim, fg: colors.danger, border: 'rgba(255,77,94,0.4)' },
-  ghost: { bg: 'transparent', fg: colors.textSecondary, border: 'transparent' },
-};
-
 const styles = StyleSheet.create({
   base: {
-    minHeight: 54,
+    minHeight: Math.max(hitTarget, 50),
     borderRadius: radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
+    overflow: 'hidden',
   },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  glyph: { fontSize: 18 },
-  title: { fontSize: 16, fontWeight: '700' },
-  pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.4 },
 });

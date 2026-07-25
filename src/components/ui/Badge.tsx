@@ -2,52 +2,41 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, radius, spacing } from '../../theme';
 
-type Tone = 'success' | 'primary' | 'danger' | 'warn' | 'muted';
+type Tone = 'neutral' | 'accent' | 'success' | 'danger' | 'warning';
 
 interface Props {
   label: string;
   tone?: Tone;
-  /** Show a leading status dot. */
-  dot?: boolean;
 }
 
-const toneColor: Record<Tone, string> = {
-  success: colors.success,
-  primary: colors.primary,
-  danger: colors.danger,
-  warn: colors.warn,
-  muted: colors.textMuted,
+const TONES: Record<Tone, { bg: string; fg: string; border: string }> = {
+  neutral: { bg: colors.surfaceSunken, fg: colors.textSecondary, border: colors.border },
+  accent: { bg: colors.primarySoft, fg: colors.primary, border: colors.primaryBorder },
+  success: { bg: colors.successSoft, fg: colors.success, border: colors.successBorder },
+  danger: { bg: colors.dangerSoft, fg: colors.danger, border: colors.dangerBorder },
+  warning: { bg: colors.warningSoft, fg: colors.warning, border: colors.warningBorder },
 };
 
-const toneBg: Record<Tone, string> = {
-  success: colors.successDim,
-  primary: colors.primaryDim,
-  danger: colors.dangerDim,
-  warn: 'rgba(255, 200, 87, 0.12)',
-  muted: 'rgba(255,255,255,0.06)',
-};
-
-/** Small status pill, e.g. "OFFLINE READY". */
-export function Badge({ label, tone = 'muted', dot = true }: Props) {
-  const c = toneColor[tone];
+/**
+ * Count or status pill. Sentence case — a badge is read, not shouted, so the
+ * label carries the meaning without relying on colour alone.
+ */
+export function Badge({ label, tone = 'neutral' }: Props) {
+  const t = TONES[tone];
   return (
-    <View style={[styles.badge, { backgroundColor: toneBg[tone] }]}>
-      {dot && <View style={[styles.dot, { backgroundColor: c }]} />}
-      <Text style={[styles.label, { color: c }]}>{label}</Text>
+    <View style={[styles.badge, { backgroundColor: t.bg, borderColor: t.border }]}>
+      <Text style={[styles.label, { color: t.fg }]}>{label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
     alignSelf: 'flex-start',
-    gap: spacing.xs + 2,
-    paddingVertical: 5,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
+    paddingVertical: 3,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  label: { fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  label: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
 });

@@ -9,6 +9,7 @@ import { FrameQuality } from '../recognition/FrameQuality';
 import { config } from '../utils/config';
 import { FaceLandmarkResult } from '../types';
 import { ImageProcessor } from '../ml/ImageProcessor';
+import { logger } from '../utils/logger';
 
 export function useFaceAuth() {
   const { livenessState, startLiveness, processFrame, resetLiveness } = useLiveness();
@@ -42,7 +43,7 @@ export function useFaceAuth() {
 
   useEffect(() => {
     Promise.all([FaceRecognizer.init(), FaceAntiSpoof.init()]).catch((e) =>
-      console.error('Failed to load ML models', e)
+      logger.error('Failed to load ML models', e)
     );
     return () => {
       stopLoop();
@@ -94,7 +95,7 @@ export function useFaceAuth() {
       const face = faces[0];
       frameCounter.current += 1;
       // --- TEMP DIAGNOSTIC (liveness signals) ---
-      console.log(
+      logger.log(
         `[Liveness] faces=${faces.length} ` +
         `smile=${(face.smilingProbability ?? -1).toFixed(2)} ` +
         `Leye=${(face.leftEyeOpenProbability ?? -1).toFixed(2)} ` +
@@ -191,11 +192,11 @@ export function useFaceAuth() {
             enrollmentEmbeddings.current.push(emb);
           }
         } catch (embError) {
-          console.warn('Failed to extract embedding during capture loop', embError);
+          logger.warn('Failed to extract embedding during capture loop', embError);
         }
       }
     } catch (e) {
-      console.warn('Capture loop error', e);
+      logger.warn('Capture loop error', e);
     } finally {
       isProcessingRef.current = false;
       setIsProcessing(false);
@@ -260,7 +261,7 @@ export function useFaceAuth() {
           setAuthStatus('SUCCESS');
           setMessage('Enrollment successful! Face template saved offline.');
         } catch (e) {
-          console.error('Error saving template:', e);
+          logger.error('Error saving template:', e);
           failAuth('Failed to save face template.');
         }
         return;
@@ -300,7 +301,7 @@ export function useFaceAuth() {
             setMessage('Face not recognized. Score is below the match threshold.');
           }
         } catch (e) {
-          console.error('Error during verification:', e);
+          logger.error('Error during verification:', e);
           failAuth('Error during face verification.');
         }
       }

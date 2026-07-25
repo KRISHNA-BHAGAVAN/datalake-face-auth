@@ -3,6 +3,7 @@ import { loadTensorflowModel, TensorflowModelDelegate } from 'react-native-fast-
 import { config } from '../utils/config';
 import { AntiSpoofResult } from '../types';
 import { resolveTfliteAsset } from './ModelAsset';
+import { logger } from '../utils/logger';
 
 let antiSpoofModel: Awaited<ReturnType<typeof loadTensorflowModel>> | null = null;
 
@@ -34,25 +35,30 @@ export class FaceAntiSpoof {
     const logits = new Float32Array(output[0]);
     const probs = softmax(logits);
 
-    // --- TEMP DIAGNOSTIC (remove after tuning) ---
-    let bmin = Infinity, bmax = -Infinity, bsum = 0;
-    for (let i = 0; i < faceBuffer.length; i++) {
-      const v = faceBuffer[i];
-      if (v < bmin) bmin = v;
-      if (v > bmax) bmax = v;
-      bsum += v;
-    }
-    const argmax = probs.indexOf(Math.max(...Array.from(probs)));
-    console.log(
-      `[AntiSpoof] buf len=${faceBuffer.length} min=${bmin.toFixed(3)} max=${bmax.toFixed(3)} mean=${(bsum / faceBuffer.length).toFixed(3)} | ` +
-      `logits=[${Array.from(logits).map((v) => v.toFixed(2)).join(', ')}] ` +
-      `probs=[${Array.from(probs).map((v) => v.toFixed(3)).join(', ')}] argmax=${argmax}`
-    );
-    // --- END DIAGNOSTIC ---
-
     const liveIndex = config.antiSpoof.liveClassIndex;
     const liveScore = probs[liveIndex];
     const isLive = liveScore >= config.antiSpoof.liveScoreThreshold;
+
+    if (config.debug.logAntiSpoof) {
+      // Scans the whole input buffer, so it stays behind the flag — this runs on
+      // the critical path of a sub-second budget.
+      let min = Infinity;
+      let max = -Infinity;
+      let sum = 0;
+      for (let i = 0; i < faceBuffer.length; i++) {
+        const v = faceBuffer[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+        sum += v;
+      }
+      logger.log(
+        `[AntiSpoof] input len=${faceBuffer.length} min=${min.toFixed(1)} ` +
+          `max=${max.toFixed(1)} mean=${(sum / faceBuffer.length).toFixed(1)} ` +
+          `(expect BGR in 0..255) | probs=[${Array.from(probs)
+            .map((v) => v.toFixed(3))
+            .join(', ')}] live=${liveScore.toFixed(3)}`
+      );
+    }
 
     return {
       isLive,

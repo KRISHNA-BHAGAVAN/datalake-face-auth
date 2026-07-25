@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { loadTensorflowModel, TensorflowModelDelegate } from 'react-native-fast-tflite';
 import { resolveTfliteAsset } from './ModelAsset';
+import { logger } from '../utils/logger';
 
 // We load the model as a singleton so it's only loaded once in memory
 let faceNetModel: any = null;
@@ -14,16 +15,16 @@ export class FaceRecognizer {
     if (faceNetModel) return; // already loaded
 
     try {
-      console.log('Loading FaceRecognizer model...');
+      logger.log('Loading FaceRecognizer model...');
       const delegates: TensorflowModelDelegate[] = Platform.OS === 'ios' ? ['core-ml'] : ['nnapi'];
       const modelSource = await resolveTfliteAsset(require('../../assets/models/mobilefacenet.tflite'));
       faceNetModel = await loadTensorflowModel(
         modelSource,
         delegates
       );
-      console.log('FaceRecognizer model loaded successfully!');
+      logger.log('FaceRecognizer model loaded successfully!');
     } catch (e) {
-      console.error('Failed to load FaceRecognizer model', e);
+      logger.error('Failed to load FaceRecognizer model', e);
       throw e;
     }
   }
@@ -52,7 +53,7 @@ export class FaceRecognizer {
       }
       return result;
     } catch (e) {
-      console.error('FaceRecognizer failed to generate embedding', e);
+      logger.error('FaceRecognizer failed to generate embedding', e);
       throw e;
     }
   }

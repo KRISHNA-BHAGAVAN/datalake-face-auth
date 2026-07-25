@@ -1,31 +1,33 @@
 import React from 'react';
 import { StyleSheet, View, ViewStyle } from 'react-native';
-import { colors, radius, spacing } from '../../theme';
+import { colors, elevation, radius, spacing } from '../../theme';
 
 interface Props {
   children: React.ReactNode;
-  /** "glass" = translucent, for layering over the camera. "solid" = opaque surface. */
-  variant?: 'solid' | 'glass';
-  /** Accent border tone. */
-  tone?: 'default' | 'primary' | 'success' | 'danger';
+  /** Tinted variants signal state. They are not decoration. */
+  tone?: 'default' | 'accent' | 'success' | 'danger';
+  /** Raise the card above the camera preview instead of the canvas. */
+  floating?: boolean;
+  /** Drop the internal padding when the card holds its own rows. */
+  flush?: boolean;
   style?: ViewStyle;
 }
 
-const borderByTone = {
-  default: colors.hairline,
-  primary: colors.primary,
-  success: colors.success,
-  danger: colors.danger,
+const TONES = {
+  default: { backgroundColor: colors.surface, borderColor: colors.border },
+  accent: { backgroundColor: colors.primarySoft, borderColor: colors.primaryBorder },
+  success: { backgroundColor: colors.successSoft, borderColor: colors.successBorder },
+  danger: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerBorder },
 };
 
-/** Rounded card with a faint accent border. The "glass" feel without iOS-only APIs. */
-export function Card({ children, variant = 'solid', tone = 'default', style }: Props) {
+export function Card({ children, tone = 'default', floating, flush, style }: Props) {
   return (
     <View
       style={[
         styles.base,
-        { backgroundColor: variant === 'glass' ? colors.surfaceTranslucent : colors.surface },
-        { borderColor: borderByTone[tone] },
+        TONES[tone],
+        !flush && styles.padded,
+        floating ? elevation.level2 : elevation.level1,
         style,
       ]}
     >
@@ -37,7 +39,7 @@ export function Card({ children, variant = 'solid', tone = 'default', style }: P
 const styles = StyleSheet.create({
   base: {
     borderRadius: radius.lg,
-    borderWidth: 1,
-    padding: spacing.lg,
+    borderWidth: StyleSheet.hairlineWidth,
   },
+  padded: { padding: spacing.lg },
 });

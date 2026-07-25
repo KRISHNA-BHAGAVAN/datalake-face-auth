@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { FaceTemplate } from '../types';
+import { logger } from '../utils/logger';
 
 const STORE_KEY = 'FACE_AUTH_TEMPLATES';
 
@@ -12,7 +13,7 @@ export class OfflineStore {
       const data = await SecureStore.getItemAsync(STORE_KEY);
       return data ? JSON.parse(data) : [];
     } catch (e) {
-      console.error('Error reading templates', e);
+      logger.error('Error reading templates', e);
       return [];
     }
   }
@@ -28,7 +29,7 @@ export class OfflineStore {
       updated.push(template);
       await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(updated));
     } catch (e) {
-      console.error('Error saving template', e);
+      logger.error('Error saving template', e);
       throw e;
     }
   }
@@ -46,7 +47,7 @@ export class OfflineStore {
       );
       await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(updated));
     } catch (e) {
-      console.error('Error marking template synced', e);
+      logger.error('Error marking template synced', e);
       throw e;
     }
   }
@@ -63,7 +64,7 @@ export class OfflineStore {
       await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(remaining));
       return removed;
     } catch (e) {
-      console.error('Error purging synced templates', e);
+      logger.error('Error purging synced templates', e);
       return 0;
     }
   }
@@ -77,7 +78,7 @@ export class OfflineStore {
       const updated = existing.filter(t => t.id !== id);
       await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(updated));
     } catch (e) {
-      console.error('Error deleting template', e);
+      logger.error('Error deleting template', e);
     }
   }
 

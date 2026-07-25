@@ -37,46 +37,47 @@ React Native** app — with the ability to **sync to AWS and purge locally** onc
 ## 3. Architecture
 
 ```
-                          ┌──────────────────────────────────────────────┐
+                          ┌────────────────────────────────────────────────┐
                           │              React Native (Expo)               │
                           │  enroll.tsx / verify.tsx → CameraFlow.tsx      │
                           └───────────────────────┬────────────────────────┘
                                                   │
-                          ┌───────────────────────▼────────────────────────┐
-                          │            react-native-vision-camera           │
+                                                  ▼
+                          ┌──────────────────────────────────────────────────┐
+                          │            react-native-vision-camera            │
                           │   (native CameraX / AVFoundation frame stream)   │
                           └──────────┬───────────────────────┬───────────────┘
                                      │ live frames           │ one photo burst
-                                     ▼                        ▼  (only after liveness passes)
+                                     ▼                       ▼  (only after liveness passes)
                     ┌────────────────────────────┐   ┌─────────────────────────────────┐
-                    │  ML Kit face detection      │   │  ML Kit still detection          │
-                    │  (native, per frame)        │   │  (bounds + eye landmarks)        │
-                    │  → LivenessStateMachine      │   └───────────────┬─────────────────┘
-                    │  blink / smile / head-turn   │                   ▼
-                    └──────────────┬──────────────┘   ┌─────────────────────────────────┐
-                                   │ PASSED            │  Quality gate (FrameQuality)     │
-                                   └──────────────────▶│  pose · size · sharpness · light │
-                                                       └───────────────┬─────────────────┘
-                                                                       ▼
+                    │  ML Kit face detection     │   │  ML Kit still detection         │
+                    │  (native, per frame)       │   │  (bounds + eye landmarks)       │
+                    │  → LivenessStateMachine    │   └───────────────┬─────────────────┘
+                    │  blink / smile / head-turn │                   ▼
+                    └──────────────┬─────────────┘   ┌─────────────────────────────────┐
+                                   │ PASSED          │  Quality gate (FrameQuality)    │
+                                   └────────────────▶│  pose · size · sharpness · light│
+                                                     └───────────────┬─────────────────┘
+                                                                     ▼
                                             ┌──────────────────────────────────────────┐
-                                            │  ImageProcessor                            │
-                                            │  eye-based alignment → 112×112 crop        │
-                                            └───────┬───────────────────────┬────────────┘
+                                            │  ImageProcessor                          │
+                                            │  eye-based alignment → 112×112 crop      │
+                                            └───────┬───────────────────────┬──────────┘
                                                     ▼                       ▼
-                                  ┌──────────────────────────┐  ┌────────────────────────┐
-                                  │ MiniFASNet V2 (anti-spoof)│  │ MobileFaceNet (TFLite)  │
-                                  │ live vs photo/screen      │  │ → face embedding        │
-                                  └──────────────────────────┘  └───────────┬────────────┘
-                                                                            ▼
-                                                          ┌────────────────────────────────┐
-                                                          │ Cosine match vs local templates │
-                                                          │ (SecureStore)  threshold 0.45   │
-                                                          └───────────────┬────────────────┘
+                                  ┌───────────────────────────┐  ┌────────────────────────┐
+                                  │ MiniFASNet V2 (anti-spoof)│  │ MobileFaceNet (TFLite) │
+                                  │ live vs photo/screen      │  │ → face embedding       │
+                                  └───────────────────────────┘  └───────────┬────────────┘
+                                                                             ▼
+                                                          ┌──────────────────────────────────┐
+                                                          │ Cosine match vs local templates  │
+                                                          │ (SecureStore)  threshold 0.48    │
+                                                          └───────────────┬──────────────────┘
                                                                           ▼
-                                                          ┌────────────────────────────────┐
-                                                          │ SyncManager → AWS (server dedup)│
-                                                          │ then purge local on demand      │
-                                                          └────────────────────────────────┘
+                                                          ┌──────────────────────────────────┐
+                                                          │ SyncManager → AWS (server dedup) │
+                                                          │ then purge local on demand       │
+                                                          └──────────────────────────────────┘
 ```
 
 **Design principle — separate the fast path from the heavy path.** Liveness must feel instant, so
@@ -138,7 +139,7 @@ performing real CNN inference for the security-critical steps.
    for verification, the probe embedding is matched against stored templates.
 
 8. **Matching** (`CosineSimilarity.ts`). Cosine similarity against locally stored templates with a
-   threshold of **0.45**, calibrated on LFW via the FAR/FRR sweep in [`benchmark/`](./benchmark/)
+   threshold of **0.48**, calibrated on LFW via the FAR/FRR sweep in [`benchmark/`](./benchmark/)
    (the earlier 0.65 rejected ~35% of genuine users for no security gain). The on-screen percentage
    is exactly this similarity score.
 
@@ -192,7 +193,7 @@ Accuracy is pursued structurally rather than by a single threshold:
 - **Multi-frame enrollment averaging** — a template built from several good frames is far more
   stable than any single shot.
 - **Enrollment de-duplication** — if a person re-enrolls, they are recognized against existing
-  templates (cosine ≥ 0.42 locally) and **no duplicate is added**; the AWS sync Lambda repeats this
+  templates (cosine ≥ 0.45 locally) and **no duplicate is added**; the AWS sync Lambda repeats this
   check server-side so a purged device can never create duplicate datalake rows.
 
 ### 5.6 Open-source only
@@ -266,11 +267,10 @@ quality gate; liveness excluded), 4,771 pairs / 10-fold protocol:
 
 | Metric | Value |
 |---|---|
-| LFW 10-fold accuracy | **96.75% ± 0.69%** (clears the >95% bar) |
-| ROC AUC | 0.982 |
-| Best-threshold accuracy | 96.86% (thr 0.373) |
-| TAR @ FAR=0.1% | 93.26% |
-| Accuracy @ app threshold 0.45 | 95.89% (FAR 0.09%, FRR 8.0%) |
+| LFW 10-fold accuracy | **97.19% ± 0.64%** (clears the >95% bar) |
+| ROC AUC | 0.984 |
+| TAR @ FAR=0.1% | 93.9% |
+| Accuracy @ app threshold 0.48 | 96.41% (FAR 0.00%, FRR 7.06%) |
 
 The threshold is exposed as a tunable operating point; `benchmark/` persists the full FAR/FRR sweep
 so judges can re-derive it. An Indian-demographic evaluation (folders + template-averaging) is
@@ -303,7 +303,7 @@ documented alongside in `benchmark/README.md`.
 - Local template store is a single secure-store blob with a linear cosine scan — excellent for the
   field-personnel scale of a single device; for very large galleries, move to an indexed store
   (e.g. SQLite) with an approximate-nearest-neighbour index.
-- Accuracy is benchmarked (LFW 96.75%, plus an Indian-demographic set — see `benchmark/`);
+- Accuracy is benchmarked (LFW 97.2%, plus an Indian-demographic set — see `benchmark/`);
   on-device **latency** on the target handset remains the recommended next measurement.
 - The AWS sync Lambda (`aws/lambda/index.mjs`, server-side dedup) is provided and tested; DynamoDB
   table provisioning + IAM are deploy-time steps documented in `aws/lambda/README.md`.
