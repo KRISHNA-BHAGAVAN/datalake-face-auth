@@ -1,5 +1,6 @@
 import { OfflineStore } from '../storage/OfflineStore';
 import { SyncResult } from '../types';
+import { logger } from '../utils/logger';
 
 const SYNC_API_URL = process.env.EXPO_PUBLIC_FACE_SYNC_API_URL;
 const SYNC_API_KEY = process.env.EXPO_PUBLIC_FACE_SYNC_API_KEY;
@@ -64,7 +65,7 @@ export class SyncManager {
         duplicates,
       };
     } catch (error) {
-      console.error('SyncManager: Sync failed', error);
+      logger.error('SyncManager: Sync failed', error);
       return {
         synced: 0,
         error: error instanceof Error ? error.message : 'Sync failed',

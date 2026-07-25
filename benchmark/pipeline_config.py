@@ -24,7 +24,7 @@ MARGIN_RATIO = 0.2
 
 # Decision threshold the app uses for a positive match
 # (config.recognition.cosineSimilarityThreshold).
-APP_COSINE_THRESHOLD = 0.45
+APP_COSINE_THRESHOLD = 0.48
 
 # Per-frame quality gate (config.quality). The app skips frames failing these so
 # blurry / tiny / dark crops don't poison the template; the benchmark mirrors it

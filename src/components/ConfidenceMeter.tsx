@@ -1,70 +1,75 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
-import { colors, radius, spacing } from '../theme';
+import { colors, motion, radius, spacing, type } from '../theme';
 
 interface Props {
   /** Match score 0..1. */
   value: number;
-  /** Pass threshold 0..1, drawn as a tick on the track. */
+  /** Pass threshold 0..1, drawn as a marker on the track. */
   threshold: number;
 }
 
-/** Horizontal match-confidence meter with a threshold marker (no SVG dep). */
+/**
+ * Match score against the pass threshold. The threshold marker is what makes
+ * the number meaningful — a bare percentage tells the user nothing about
+ * whether it was close.
+ */
 export function ConfidenceMeter({ value, threshold }: Props) {
   const fill = useRef(new Animated.Value(0)).current;
-  const pct = Math.round(value * 100);
+  const clamped = Math.max(0, Math.min(1, value));
   const pass = value >= threshold;
   const accent = pass ? colors.success : colors.danger;
 
   useEffect(() => {
     Animated.timing(fill, {
-      toValue: Math.max(0, Math.min(1, value)),
-      duration: 700,
+      toValue: clamped,
+      duration: motion.slow,
       useNativeDriver: false,
     }).start();
-  }, [value, fill]);
+  }, [clamped, fill]);
 
-  const widthInterp = fill.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+  const width = fill.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   return (
-    <View style={styles.wrap}>
+    <View
+      style={styles.wrap}
+      accessibilityRole="progressbar"
+      accessibilityLabel={`Match score ${Math.round(clamped * 100)} percent, ${
+        pass ? 'above' : 'below'
+      } the ${Math.round(threshold * 100)} percent threshold`}
+    >
       <View style={styles.labelRow}>
-        <Text style={styles.label}>MATCH CONFIDENCE</Text>
-        <Text style={[styles.pct, { color: accent }]}>{pct}%</Text>
+        <Text style={type.secondary}>Match score</Text>
+        <Text style={[styles.value, { color: accent }]}>{Math.round(clamped * 100)}%</Text>
       </View>
+
       <View style={styles.track}>
-        <Animated.View style={[styles.fill, { width: widthInterp, backgroundColor: accent }]} />
-        <View style={[styles.threshTick, { left: `${threshold * 100}%` }]} />
+        <Animated.View style={[styles.fill, { width, backgroundColor: accent }]} />
+        <View style={[styles.marker, { left: `${threshold * 100}%` }]} />
       </View>
-      <Text style={styles.threshLabel}>
-        Pass threshold {Math.round(threshold * 100)}%
-      </Text>
+
+      <Text style={type.caption}>Passes at {Math.round(threshold * 100)}%</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { width: '100%', gap: spacing.sm },
-  labelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  label: { fontSize: 11, fontWeight: '700', letterSpacing: 1, color: colors.textMuted },
-  pct: { fontSize: 26, fontWeight: '800' },
+  wrap: { gap: spacing.sm },
+  labelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  value: { fontSize: 22, lineHeight: 28, fontWeight: '700', fontVariant: ['tabular-nums'] },
   track: {
-    height: 10,
+    height: 8,
     borderRadius: radius.pill,
-    backgroundColor: colors.bgElevated,
-    borderWidth: 1,
-    borderColor: colors.hairlineSoft,
-    overflow: 'visible',
+    backgroundColor: colors.surfaceSunken,
     justifyContent: 'center',
   },
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: radius.pill },
-  threshTick: {
+  marker: {
     position: 'absolute',
     top: -3,
     width: 2,
-    height: 16,
-    backgroundColor: colors.text,
-    opacity: 0.7,
+    height: 14,
+    borderRadius: 1,
+    backgroundColor: colors.textSecondary,
   },
-  threshLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
 });

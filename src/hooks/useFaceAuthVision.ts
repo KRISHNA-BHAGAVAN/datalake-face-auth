@@ -17,10 +17,17 @@ import { OfflineStore } from '../storage/OfflineStore';
 import { computeCosineSimilarity, averageEmbeddings } from '../recognition/CosineSimilarity';
 import { FrameQuality } from '../recognition/FrameQuality';
 import { config } from '../utils/config';
-import { FaceLandmarkResult } from '../types';
+import { FaceLandmarkResult, LivenessChallengeType } from '../types';
+import { logger } from '../utils/logger';
 
 type AuthStatus = 'IDLE' | 'ENROLLING' | 'VERIFYING' | 'SUCCESS' | 'FAILED';
 type Facing = 'front' | 'back';
+type AuthAction = 'ENROLL' | 'VERIFY';
+
+const STALE_SESSION_ERROR = 'STALE_FACE_AUTH_SESSION';
+
+const challengesForAction = (action: AuthAction): LivenessChallengeType[] =>
+  action === 'ENROLL' ? ['SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'] : ['BLINK'];
 
 const errorToMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -46,9 +53,42 @@ export function useFaceAuthVision() {
 
   const device = useCameraDevice(facing);
 
-  const currentAction = useRef<'ENROLL' | 'VERIFY' | null>(null);
+  const currentAction = useRef<AuthAction | null>(null);
   const livenessStatusRef = useRef(livenessState.status);
   const resolvingRef = useRef(false); // guards the one-shot end burst
+  const flowSessionRef = useRef(0);
+
+  /**
+   * "Shutter fired" notifications for the UI, delivered WITHOUT React state.
+   *
+   * A re-render during the capture burst is not free here. `useFaceDetectorOutput`
+   * memoises on a rest-spread object that is rebuilt on every call, so its
+   * `useMemo` never hits and it hands back a NEW native output each render —
+   * which makes `<Camera outputs>` tear down and rebind the capture session.
+   * One `setState` per photo therefore killed the burst: captures threw
+   * "Not bound to a valid Camera" and enrollment never collected its embeddings.
+   * (The same effect is why `capturePhotoWithRetry` exists: the single
+   * `setIsProcessing(true)` before the burst already rebinds once.)
+   *
+   * So the overlay subscribes to this instead and animates imperatively.
+   */
+  const captureSubscribers = useRef(new Set<() => void>());
+  const subscribeCapture = useCallback((fn: () => void) => {
+    captureSubscribers.current.add(fn);
+    return () => {
+      captureSubscribers.current.delete(fn);
+    };
+  }, []);
+  const emitCapture = useCallback(() => {
+    captureSubscribers.current.forEach((fn) => {
+      try {
+        fn();
+      } catch (e) {
+        // A broken listener must never take down the capture pipeline.
+        logger.warn('capture listener failed', e);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     livenessStatusRef.current = livenessState.status;
@@ -65,7 +105,7 @@ export function useFaceAuthVision() {
         }
       })
       .catch((e) => {
-        console.error('Failed to load ML models', e);
+        logger.error('Failed to load ML models', e);
         if (!cancelled) {
           setModelsReady(false);
           setModelError(errorToMessage(e));
@@ -77,7 +117,22 @@ export function useFaceAuthVision() {
     };
   }, []);
 
+  const isStaleSession = useCallback(
+    (sessionId: number) => sessionId !== flowSessionRef.current || !currentAction.current,
+    []
+  );
+
+  const assertCurrentSession = useCallback(
+    (sessionId: number) => {
+      if (isStaleSession(sessionId)) {
+        throw new Error(STALE_SESSION_ERROR);
+      }
+    },
+    [isStaleSession]
+  );
+
   const failAuth = useCallback((userMessage: string) => {
+    flowSessionRef.current += 1;
     currentAction.current = null;
     setIsProcessing(false);
     setAuthStatus('FAILED');
@@ -116,6 +171,7 @@ export function useFaceAuthVision() {
         f.leftEyeOpenProbability != null &&
         f.rightEyeOpenProbability != null;
       if (!hasClassifications) {
+        setMessage('Position your face clearly in view');
         processFrame({
           hasFace: false,
           boundingBox: null,
@@ -125,6 +181,17 @@ export function useFaceAuthVision() {
           roll: 0,
         });
         return;
+      }
+
+      // Real-time quality hints during live stream
+      if (Math.abs(f.pitchAngle) > config.quality.maxPitchDeg) {
+        setMessage('Keep your head level');
+      } else if (
+        (f.yawAngle < -35 || f.yawAngle > 35)
+      ) {
+        setMessage('Face the camera directly');
+      } else {
+        setMessage('');
       }
 
       const result: FaceLandmarkResult = {
@@ -147,7 +214,7 @@ export function useFaceAuthVision() {
     [processFrame]
   );
 
-  const onError = useCallback((e: Error) => console.warn('Face detector error', e), []);
+  const onError = useCallback((e: Error) => logger.warn('Face detector error', e), []);
 
   const faceOutput = useFaceDetectorOutput(
     useMemo(
@@ -197,10 +264,11 @@ export function useFaceAuthVision() {
     throw lastErr;
   }, []);
 
-  const captureEmbeddings = useCallback(async () => {
+  const captureEmbeddings = useCallback(async (sessionId: number) => {
     if (!modelsReady) {
       throw new Error('Face models are still loading');
     }
+    assertCurrentSession(sessionId);
 
     const wanted =
       currentAction.current === 'VERIFY'
@@ -209,26 +277,46 @@ export function useFaceAuthVision() {
 
     // Give CameraX a moment to bind the photo use-case before the burst.
     await sleep(300);
+    assertCurrentSession(sessionId);
 
     const embeddings: number[][] = [];
-    let spoofChecks = 0;
-    let spoofFails = 0;
+    const spoofScores: number[] = [];
     let lastEmbedMs = 0;
     let lastIssue: string | null = null;
 
-    // Collect up to `wanted` GOOD embeddings, with a couple of spare attempts so a
-    // single blurry/off-angle frame doesn't sink the whole burst. We stop as soon as
-    // we have enough — for verify (wanted=1) that's usually a single capture.
-    const maxAttempts = wanted + 2;
+    const meanSpoofScore = () =>
+      spoofScores.reduce((a, b) => a + b, 0) / spoofScores.length;
 
-    for (let i = 0; i < maxAttempts && embeddings.length < wanted; i++) {
+    /**
+     * Have we sampled the anti-spoof model enough to commit? Stop early when the
+     * running mean is clearly on one side of the boundary; keep sampling while
+     * it's ambiguous, up to maxChecks.
+     */
+    const spoofDecided = () => {
+      const { maxChecks, confidentLiveScore, confidentSpoofScore } = config.antiSpoof;
+      if (spoofScores.length === 0) return false;
+      if (spoofScores.length >= maxChecks) return true;
+      const mean = meanSpoofScore();
+      return mean >= confidentLiveScore || mean <= confidentSpoofScore;
+    };
+
+    // Collect up to `wanted` GOOD embeddings, with spare attempts so a single
+    // blurry/off-angle frame doesn't sink the burst. We also keep going while the
+    // anti-spoof verdict is still ambiguous, so the extra latency is only paid on
+    // genuinely borderline faces.
+    const maxAttempts = wanted + config.antiSpoof.maxChecks;
+
+    for (let i = 0; i < maxAttempts && (embeddings.length < wanted || !spoofDecided()); i++) {
       let uri: string;
       try {
         const photo = await capturePhotoWithRetry();
+        assertCurrentSession(sessionId);
         uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
+        emitCapture();
       } catch (e) {
+        if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
         lastIssue = `photo capture failed: ${errorToMessage(e)}`;
-        console.warn('capturePhotoToFile failed', e);
+        logger.warn('capturePhotoToFile failed', e);
         continue;
       }
 
@@ -241,9 +329,11 @@ export function useFaceAuthVision() {
           landmarkMode: 'all', // eye positions for alignment
           classificationMode: 'all',
         });
+        assertCurrentSession(sessionId);
       } catch (e) {
+        if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
         lastIssue = `still-face detection failed: ${errorToMessage(e)}`;
-        console.warn('still-face detection failed', e);
+        logger.warn('still-face detection failed', e);
         continue;
       }
       if (!faces.length) {
@@ -256,9 +346,11 @@ export function useFaceAuthVision() {
       let height: number;
       try {
         ({ width, height } = await getImageSize(uri));
+        assertCurrentSession(sessionId);
       } catch (e) {
+        if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
         lastIssue = `captured photo could not be read: ${errorToMessage(e)}`;
-        console.warn('captured photo could not be read', e);
+        logger.warn('captured photo could not be read', e);
         continue;
       }
       const normBox = {
@@ -268,28 +360,18 @@ export function useFaceAuthVision() {
         height: f.frame.height / height,
       };
 
-      // Anti-spoof backstop — run ONCE on the first detected frame. A photo/screen
-      // attack is constant across frames, so one classification is sufficient and we
-      // avoid an extra tflite run per capture.
-      if (spoofChecks === 0) {
-        try {
-          const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
-          const spoof = await FaceAntiSpoof.classify(spoofBuf);
-          spoofChecks += 1;
-          if (!spoof.isLive) spoofFails += 1;
-        } catch (e) {
-          lastIssue = `anti-spoof check failed: ${errorToMessage(e)}`;
-          console.warn('anti-spoof failed', e);
-        }
-      }
-
-      // Quality gate (geometry uses degrees, like FrameQuality expects).
+      // Quality gate first (geometry uses degrees, like FrameQuality expects).
+      // Anti-spoof used to run before this, which meant a blurry or badly-lit frame
+      // — one the pipeline was about to discard anyway — could still produce the
+      // spoof verdict that failed the whole attempt. MiniFASNet keys on texture, so
+      // an out-of-focus frame reads as a print attack. Only score good frames.
       const geo = FrameQuality.assessGeometry(
         { frame: { width: f.frame.width }, rotationX: f.rotationX, rotationY: f.rotationY },
         width
       );
       if (!geo.ok) {
         lastIssue = geo.reason;
+        setMessage(geo.reason);
         continue;
       }
 
@@ -298,26 +380,67 @@ export function useFaceAuthVision() {
         lm?.leftEye && lm?.rightEye
           ? { left: lm.leftEye.position, right: lm.rightEye.position }
           : null;
+
+      let tensor: Awaited<ReturnType<typeof ImageProcessor.processFaceImage>>;
       try {
-        const tensor = await ImageProcessor.processFaceImage(uri, width, height, normBox, eyes);
-        const pixelQuality = FrameQuality.assessPixels(tensor.sharpness, tensor.brightness);
-        if (!pixelQuality.ok) {
-          lastIssue = pixelQuality.reason;
-          continue;
-        }
-        const t0 = Date.now();
-        const emb = await FaceRecognizer.getEmbedding(tensor.input);
-        lastEmbedMs = Date.now() - t0;
-        embeddings.push(emb);
+        tensor = await ImageProcessor.processFaceImage(uri, width, height, normBox, eyes);
+        assertCurrentSession(sessionId);
       } catch (e) {
-        lastIssue = `embedding failed: ${errorToMessage(e)}`;
-        console.warn('embedding failed', e);
+        if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
+        lastIssue = `face preprocessing failed: ${errorToMessage(e)}`;
+        logger.warn('face preprocessing failed', e);
+        continue;
+      }
+
+      const pixelQuality = FrameQuality.assessPixels(tensor.sharpness, tensor.brightness);
+      if (!pixelQuality.ok) {
+        lastIssue = pixelQuality.reason;
+        setMessage(pixelQuality.reason);
+        continue;
+      }
+
+      // Anti-spoof on a frame that already passed quality.
+      if (!spoofDecided()) {
+        try {
+          const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
+          assertCurrentSession(sessionId);
+          const spoof = await FaceAntiSpoof.classify(spoofBuf);
+          assertCurrentSession(sessionId);
+          spoofScores.push(spoof.liveScore);
+        } catch (e) {
+          if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
+          lastIssue = `anti-spoof check failed: ${errorToMessage(e)}`;
+          logger.warn('anti-spoof failed', e);
+        }
+      }
+
+      if (embeddings.length < wanted) {
+        try {
+          const t0 = Date.now();
+          const emb = await FaceRecognizer.getEmbedding(tensor.input);
+          assertCurrentSession(sessionId);
+          lastEmbedMs = Date.now() - t0;
+          embeddings.push(emb);
+          if (embeddings.length < wanted) {
+            setMessage(`Captured frame ${embeddings.length} of ${wanted}`);
+          } else {
+            setMessage('Processing biometric template...');
+          }
+        } catch (e) {
+          if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
+          lastIssue = `embedding failed: ${errorToMessage(e)}`;
+          logger.warn('embedding failed', e);
+        }
       }
     }
 
-    const spoofed = spoofChecks > 0 && spoofFails >= Math.ceil(spoofChecks / 2);
-    return { embeddings, spoofed, lastEmbedMs, lastIssue };
-  }, [capturePhotoWithRetry, modelsReady]);
+    // Fail-open when every check errored (unchanged behaviour): the liveness
+    // challenges already ran, and a transient tflite error shouldn't lock a genuine
+    // user out. `lastIssue` carries the reason.
+    const spoofScore = spoofScores.length > 0 ? meanSpoofScore() : null;
+    const spoofed = spoofScore != null && spoofScore < config.antiSpoof.liveScoreThreshold;
+    return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue };
+  }, [assertCurrentSession, capturePhotoWithRetry, emitCapture, modelsReady]);
 
   // Resolve the flow once liveness reaches a terminal state.
   useEffect(() => {
@@ -330,14 +453,18 @@ export function useFaceAuthVision() {
     if (livenessState.status !== 'PASSED' || resolvingRef.current) return;
 
     resolvingRef.current = true;
+    const sessionId = flowSessionRef.current;
     const run = async () => {
       setIsProcessing(true);
       const startedAt = Date.now();
       try {
-        const { embeddings, spoofed, lastEmbedMs, lastIssue } = await captureEmbeddings();
+        const { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue } =
+          await captureEmbeddings(sessionId);
+        if (isStaleSession(sessionId)) return;
 
         if (spoofed) {
-          failAuth('Spoof detected. Use your real face, not a photo or screen.');
+          logger.log(`[AntiSpoof] rejected, mean live score ${spoofScore?.toFixed(3)}`);
+          failAuth('Presentation attack detected. Use your real face, not a photo or screen.');
           return;
         }
         if (embeddings.length === 0) {
@@ -351,16 +478,18 @@ export function useFaceAuthVision() {
 
         const avg = averageEmbeddings(embeddings);
         const action = currentAction.current;
+        if (!action || isStaleSession(sessionId)) return;
 
         if (action === 'ENROLL') {
           const existing = await OfflineStore.getTemplates();
+          if (isStaleSession(sessionId)) return;
           let maxSim = -1;
           for (const t of existing) {
             const sim = computeCosineSimilarity(avg, t.embedding);
             if (sim > maxSim) maxSim = sim;
           }
-          currentAction.current = null;
           if (maxSim >= config.enroll.duplicateThreshold) {
+            currentAction.current = null;
             setConfidence(maxSim);
             setAuthStatus('SUCCESS');
             setMessage(
@@ -374,6 +503,8 @@ export function useFaceAuthVision() {
             createdAt: Date.now(),
             isSynced: false,
           });
+          if (isStaleSession(sessionId)) return;
+          currentAction.current = null;
           setAuthStatus('SUCCESS');
           setMessage('Enrollment successful! Face template saved offline.');
           return;
@@ -381,6 +512,7 @@ export function useFaceAuthVision() {
 
         // VERIFY
         const templates = await OfflineStore.getTemplates();
+        if (isStaleSession(sessionId)) return;
         if (templates.length === 0) {
           failAuth('Verification failed: no enrolled templates.');
           return;
@@ -403,19 +535,22 @@ export function useFaceAuthVision() {
           setMessage('Face not recognized. Score is below the match threshold.');
         }
       } catch (e) {
-        console.error('Recognition burst error', e);
+        if (errorToMessage(e) === STALE_SESSION_ERROR) return;
+        logger.error('Recognition burst error', e);
         failAuth('Error during face processing.');
       } finally {
-        setIsProcessing(false);
+        if (sessionId === flowSessionRef.current) {
+          setIsProcessing(false);
+        }
         void startedAt;
       }
     };
     run();
-  }, [livenessState.status, livenessState.message, captureEmbeddings, failAuth]);
+  }, [livenessState.status, livenessState.message, captureEmbeddings, failAuth, isStaleSession]);
 
   // --- Controls ------------------------------------------------------------
   const begin = useCallback(
-    (action: 'ENROLL' | 'VERIFY', challenges: Parameters<typeof startLiveness>[0]) => {
+    (action: AuthAction, challenges: LivenessChallengeType[]) => {
       if (modelError) {
         failAuth(`Face engine failed to load: ${modelError}`);
         return;
@@ -425,7 +560,9 @@ export function useFaceAuthVision() {
         setMessage('Preparing face engine...');
         return;
       }
+      flowSessionRef.current += 1;
       resolvingRef.current = false;
+      livenessStatusRef.current = 'IN_PROGRESS';
       currentAction.current = action;
       setAuthStatus(action === 'ENROLL' ? 'ENROLLING' : 'VERIFYING');
       setConfidence(null);
@@ -439,13 +576,15 @@ export function useFaceAuthVision() {
   );
 
   const startEnrollment = useCallback(
-    () => begin('ENROLL', ['SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT']),
+    () => begin('ENROLL', challengesForAction('ENROLL')),
     [begin]
   );
-  const startVerification = useCallback(() => begin('VERIFY', ['BLINK']), [begin]);
+  const startVerification = useCallback(() => begin('VERIFY', challengesForAction('VERIFY')), [begin]);
 
   const reset = useCallback(() => {
+    flowSessionRef.current += 1;
     resolvingRef.current = false;
+    livenessStatusRef.current = 'IDLE';
     currentAction.current = null;
     setAuthStatus('IDLE');
     setMessage('');
@@ -455,7 +594,25 @@ export function useFaceAuthVision() {
     resetLiveness();
   }, [resetLiveness]);
 
-  const toggleFacing = useCallback(() => setFacing((p) => (p === 'front' ? 'back' : 'front')), []);
+  const toggleFacing = useCallback(() => {
+    const action = currentAction.current;
+    // Invalidate session immediately on camera flip
+    flowSessionRef.current += 1;
+    resolvingRef.current = false;
+    livenessStatusRef.current = action ? 'IN_PROGRESS' : 'IDLE';
+    setIsProcessing(false);
+    setConfidence(null);
+    setLatencyMs(null);
+    resetLiveness();
+
+    setFacing((p) => (p === 'front' ? 'back' : 'front'));
+
+    if (action) {
+      begin(action, challengesForAction(action));
+    } else {
+      reset();
+    }
+  }, [begin, reset, resetLiveness]);
 
   // Keep the camera session running only while a flow is active.
   const isActive = authStatus === 'ENROLLING' || authStatus === 'VERIFYING';
@@ -466,6 +623,8 @@ export function useFaceAuthVision() {
     authStatus,
     message,
     isProcessing,
+    /** Subscribe to per-photo shutter events. Fires no re-render — see above. */
+    subscribeCapture,
     confidence,
     latencyMs,
     modelsReady,

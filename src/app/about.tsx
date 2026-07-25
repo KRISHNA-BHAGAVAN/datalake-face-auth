@@ -1,101 +1,120 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, spacing, type } from '../theme';
-import { Badge, Card, Screen, SectionLabel, StatChip } from '../components/ui';
+import { colors, radius, spacing, type } from '../theme';
+import { Card, DataRow, Icon, IconName, Screen, SectionLabel, StatChip } from '../components/ui';
 
-const PIPELINE = [
+const PIPELINE: { icon: IconName; title: string; desc: string }[] = [
   {
-    glyph: '🛡',
-    title: '1 · Anti-Spoof',
-    desc: 'MiniFASNet V2 rejects photos and screens before anything else runs.',
+    icon: 'antiSpoof',
+    title: 'Anti-spoofing',
+    desc: 'MiniFASNet V2 rejects photos and screen replays before anything else runs.',
   },
   {
-    glyph: '👁',
-    title: '2 · Liveness',
-    desc: 'Active challenges (blink, smile, head turn) prove a live person is present.',
+    icon: 'liveness',
+    title: 'Liveness',
+    desc: 'Blink, smile and head-turn challenges confirm a live person is present.',
   },
   {
-    glyph: '◈',
-    title: '3 · Recognition',
-    desc: 'MobileFaceNet embeddings matched by cosine similarity against the local template.',
+    icon: 'verify',
+    title: 'Recognition',
+    desc: 'MobileFaceNet embeddings matched by cosine similarity against local templates.',
   },
 ];
 
 export default function AboutScreen() {
   return (
-    <Screen scroll contentStyle={styles.content}>
+    <Screen scroll contentStyle={styles.content} edges={['bottom']}>
       <View style={styles.intro}>
         <Text style={type.title}>How it works</Text>
         <Text style={type.secondary}>
-          A fully offline face-auth pipeline that runs entirely on the device — no network, no
-          cloud inference.
+          Three checks run in sequence on the device. Nothing leaves the phone during
+          authentication, and no network connection is required.
         </Text>
-        <View style={styles.badges}>
-          <Badge label="OPEN SOURCE" tone="primary" />
-          <Badge label="OFFLINE" tone="success" />
-          <Badge label="ANDROID + iOS" tone="muted" />
-        </View>
       </View>
 
       <SectionLabel>Pipeline</SectionLabel>
-      {PIPELINE.map((p) => (
-        <Card key={p.title} style={styles.stepCard}>
-          <Text style={styles.stepGlyph}>{p.glyph}</Text>
-          <View style={styles.stepText}>
-            <Text style={type.heading}>{p.title}</Text>
-            <Text style={type.secondary}>{p.desc}</Text>
+      <Card flush>
+        {PIPELINE.map((step, i) => (
+          <View key={step.title} style={[styles.step, i > 0 && styles.stepDivided]}>
+            <View style={styles.stepIcon}>
+              <Icon name={step.icon} size="lg" color={colors.primary} />
+            </View>
+            <View style={styles.stepText}>
+              <View style={styles.stepTitleRow}>
+                <Text style={type.caption}>Step {i + 1}</Text>
+              </View>
+              <Text style={type.bodyStrong}>{step.title}</Text>
+              <Text style={type.secondary}>{step.desc}</Text>
+            </View>
           </View>
-        </Card>
-      ))}
-
-      <SectionLabel>Model Footprint</SectionLabel>
-      <Card tone="primary">
-        <Text style={type.secondary}>
-          Total on-device AI payload — well under the 20&nbsp;MB target.
-        </Text>
-        <View style={styles.chipRow}>
-          <StatChip label="RECOGNITION" value="5.2 MB" tone="primary" />
-          <StatChip label="ANTI-SPOOF" value="1.8 MB" tone="primary" />
-          <StatChip label="TOTAL" value="~7 MB" tone="success" />
-        </View>
-        <Text style={styles.note}>MobileFaceNet · MiniFASNet V2 — both quantized TFLite.</Text>
+        ))}
       </Card>
 
-      <SectionLabel>Benchmarks</SectionLabel>
-      <Card>
-        <View style={styles.chipRow}>
-          <StatChip label="RECOGNIZE + LIVENESS" value="< 1s" tone="success" />
-          <StatChip label="MATCH THRESHOLD" value="65%" tone="default" />
-        </View>
-        <View style={[styles.chipRow, { marginTop: spacing.md }]}>
-          <StatChip label="MIN RAM" value="3 GB" tone="default" />
-          <StatChip label="MIN OS" value="A8 / iOS12" tone="default" />
-        </View>
+      <SectionLabel trailing="Quantized TFLite">Model size</SectionLabel>
+      <View style={styles.tiles}>
+        <StatChip label="Recognition" value="5.2 MB" />
+        <StatChip label="Anti-spoof" value="1.8 MB" />
+        <StatChip label="Total" value="7 MB" />
+      </View>
+
+      <SectionLabel>Performance</SectionLabel>
+      <Card style={styles.rows}>
+        <DataRow label="Recognition time" value="Under 1s" tone="success" />
+        <View style={styles.divider} />
+        <DataRow label="Match threshold" value="48%" />
+        <View style={styles.divider} />
+        <DataRow label="Minimum RAM" value="3 GB" />
+        <View style={styles.divider} />
+        <DataRow label="Minimum OS" value="iOS 12 / A8" />
       </Card>
 
-      <SectionLabel>Sync & Privacy</SectionLabel>
-      <Card>
-        <Text style={type.body}>Offline-first with sync-then-purge.</Text>
-        <Text style={[type.secondary, styles.para]}>
-          Templates are stored encrypted on the device and used for matching locally. When
-          connectivity returns, unsynced templates upload to AWS and are purged from local storage.
-        </Text>
+      <SectionLabel>Storage and sync</SectionLabel>
+      <Card style={styles.notes}>
+        <View style={styles.note}>
+          <Icon name="privacy" size="lg" color={colors.textTertiary} />
+          <Text style={[type.secondary, styles.noteText]}>
+            Templates are encrypted on the device and matched locally.
+          </Text>
+        </View>
+        <View style={styles.divider} />
+        <View style={styles.note}>
+          <Icon name="upload" size="lg" color={colors.textTertiary} />
+          <Text style={[type.secondary, styles.noteText]}>
+            Uploads are manual. Duplicates are rejected server-side, and local copies are only
+            removed when you ask for it.
+          </Text>
+        </View>
+        <View style={styles.divider} />
+        <View style={styles.note}>
+          <Icon name="offline" size="lg" color={colors.textTertiary} />
+          <Text style={[type.secondary, styles.noteText]}>
+            Enrollment and verification work with no connectivity at all.
+          </Text>
+        </View>
       </Card>
-
-      <Text style={styles.footer}>Datalake 3.0 · Hackathon 7 prototype</Text>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingTop: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
+  content: { paddingTop: spacing.md, paddingBottom: spacing.huge },
   intro: { gap: spacing.sm },
-  badges: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, flexWrap: 'wrap' },
-  stepCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
-  stepGlyph: { fontSize: 28 },
-  stepText: { flex: 1, gap: 3 },
-  chipRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
-  note: { color: colors.textMuted, fontSize: 12, marginTop: spacing.md },
-  para: { marginTop: spacing.sm, lineHeight: 20 },
-  footer: { color: colors.textMuted, fontSize: 12, textAlign: 'center', marginTop: spacing.lg },
+  step: { flexDirection: 'row', gap: spacing.md, padding: spacing.lg },
+  stepDivided: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  stepIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepText: { flex: 1, gap: 2 },
+  stepTitleRow: { flexDirection: 'row' },
+  tiles: { flexDirection: 'row', gap: spacing.sm },
+  rows: { gap: spacing.xs },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  notes: { gap: spacing.lg },
+  note: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
+  noteText: { flex: 1 },
 });

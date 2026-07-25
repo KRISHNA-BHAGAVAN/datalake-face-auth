@@ -17,7 +17,7 @@ Reports the same metrics as run_benchmark (acc @ app threshold, best-threshold,
 AUC, TAR@FAR, operating-point sweep) so the two are directly comparable.
 
     python template_eval.py --folders "data/.../Bollywood Actor Images" \
-        --num-same 1500 --num-diff 1500 --out results_indian_template
+        --num-same 1500 --num-diff 1500 --out results/indian_template_avg
 """
 
 import argparse

@@ -1,25 +1,29 @@
 import React from 'react';
 import { ScrollView, StyleSheet, View, ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Edge, SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing } from '../../theme';
 
 interface Props {
   children: React.ReactNode;
   scroll?: boolean;
   contentStyle?: ViewStyle;
+  edges?: readonly Edge[];
 }
 
-/** Dark, safe-area-aware page wrapper. Pass scroll for long content. */
-export function Screen({ children, scroll, contentStyle }: Props) {
-  const inner = (
-    <View style={[styles.content, contentStyle]}>{children}</View>
-  );
+/**
+ * Safe-area-aware page wrapper. Horizontal gutters live here so every screen
+ * shares one content width.
+ */
+export function Screen({ children, scroll, contentStyle, edges = ['top', 'bottom'] }: Props) {
+  const inner = <View style={[styles.content, contentStyle]}>{children}</View>;
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={edges}>
       {scroll ? (
         <ScrollView
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
           {inner}
         </ScrollView>
@@ -31,7 +35,7 @@ export function Screen({ children, scroll, contentStyle }: Props) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
+  safe: { flex: 1, backgroundColor: colors.canvas },
   scroll: { flexGrow: 1 },
-  content: { flex: 1, paddingHorizontal: spacing.xl, gap: spacing.lg },
+  content: { flex: 1, paddingHorizontal: spacing.lg },
 });

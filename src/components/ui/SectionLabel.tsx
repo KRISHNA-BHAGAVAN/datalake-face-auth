@@ -1,20 +1,32 @@
 import React from 'react';
-import { StyleSheet, Text } from 'react-native';
-import { colors, spacing } from '../../theme';
+import { StyleSheet, Text, View } from 'react-native';
+import { spacing, type } from '../../theme';
 
-/** Uppercase section divider label. */
-export function SectionLabel({ children }: { children: string }) {
-  return <Text style={styles.label}>{children}</Text>;
+interface Props {
+  children: string;
+  /** Right-aligned counterpart, e.g. a count or unit. */
+  trailing?: string;
+}
+
+/** Header above a grouped list or card section. */
+export function SectionLabel({ children, trailing }: Props) {
+  return (
+    <View style={styles.row}>
+      <Text style={type.sectionHeader} accessibilityRole="header">
+        {children}
+      </Text>
+      {trailing ? <Text style={type.caption}>{trailing}</Text> : null}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  label: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-    color: colors.textMuted,
-    marginTop: spacing.sm,
-    marginBottom: -spacing.xs,
+  row: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginTop: spacing.xxl,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.xs,
   },
 });
