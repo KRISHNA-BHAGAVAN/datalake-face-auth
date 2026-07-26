@@ -14,7 +14,12 @@ import { FaceRecognizer } from '../ml/FaceRecognizer';
 import { FaceAntiSpoof } from '../ml/FaceAntiSpoof';
 import { ImageProcessor } from '../ml/ImageProcessor';
 import { OfflineStore } from '../storage/OfflineStore';
-import { computeCosineSimilarity, averageEmbeddings } from '../recognition/CosineSimilarity';
+import {
+  computeCosineSimilarity,
+  computeWeightedCosineSimilarity,
+  getPeriocularWeights,
+  averageEmbeddings,
+} from '../recognition/CosineSimilarity';
 import { FrameQuality } from '../recognition/FrameQuality';
 import { config } from '../utils/config';
 import { FaceLandmarkResult, LivenessChallengeType } from '../types';
@@ -474,8 +479,9 @@ export function useFaceAuthVision() {
           const existing = await OfflineStore.getTemplates();
           if (isStaleSession(sessionId)) return;
           let maxSim = -1;
+          const weights = getPeriocularWeights(avg.length);
           for (const t of existing) {
-            const sim = computeCosineSimilarity(avg, t.embedding);
+            const sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
             if (sim > maxSim) maxSim = sim;
           }
           const matchMs = Date.now() - matchStart;
@@ -520,8 +526,9 @@ export function useFaceAuthVision() {
         }
         const matchStart = Date.now();
         let maxSim = -1;
+        const weights = getPeriocularWeights(avg.length);
         for (const t of templates) {
-          const sim = computeCosineSimilarity(avg, t.embedding);
+          const sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
           if (sim > maxSim) maxSim = sim;
         }
         const matchMs = Date.now() - matchStart;
