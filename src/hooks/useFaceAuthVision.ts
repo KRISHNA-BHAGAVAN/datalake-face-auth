@@ -246,7 +246,10 @@ export function useFaceAuthVision() {
 
   const photoOutput = usePhotoOutput();
   const photoOutputRef = useRef(photoOutput);
-  photoOutputRef.current = photoOutput;
+
+  useEffect(() => {
+    photoOutputRef.current = photoOutput;
+  }, [photoOutput]);
 
   // --- One-shot recognition burst (runs when liveness passes) --------------
   const getImageSize = (uri: string) =>
@@ -431,7 +434,8 @@ export function useFaceAuthVision() {
     if (!currentAction.current) return;
 
     if (livenessState.status === 'FAILED') {
-      failAuth(livenessState.message || 'Liveness check failed. Please try again.');
+      const msg = livenessState.message || 'Liveness check failed. Please try again.';
+      queueMicrotask(() => failAuth(msg));
       return;
     }
     if (livenessState.status !== 'PASSED' || resolvingRef.current) return;
@@ -442,7 +446,6 @@ export function useFaceAuthVision() {
 
     const run = async () => {
       setIsProcessing(true);
-      const burstStart = Date.now();
       try {
         const { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue } =
           await captureEmbeddings(sessionId);
