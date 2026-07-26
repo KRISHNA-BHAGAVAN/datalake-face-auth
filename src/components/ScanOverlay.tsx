@@ -13,6 +13,12 @@ const RX = FRAME_WIDTH / 2;
 const RY = FRAME_HEIGHT / 2;
 const DOT = 8;
 
+interface Props {
+  resolved: 'success' | 'danger' | null;
+  scanning: boolean;
+  subscribeCapture: (fn: () => void) => () => void;
+}
+
 /**
  * High-tech biometric scanner overlay.
  * Features:

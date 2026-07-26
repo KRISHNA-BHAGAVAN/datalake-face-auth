@@ -21,6 +21,7 @@ export default function HomeScreen() {
   const [unsyncedCount, setUnsyncedCount] = useState(0);
   const [syncedCount, setSyncedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const refresh = useCallback(() => {
     OfflineStore.getTemplates().then((t) => {
@@ -56,6 +57,24 @@ export default function HomeScreen() {
       }
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const onDownloadCloud = async () => {
+    setDownloading(true);
+    try {
+      const res = await SyncManager.downloadCloudTemplates();
+      refresh();
+      if (res.error) {
+        Alert.alert('Download failed', res.error);
+      } else {
+        Alert.alert(
+          'Cloud Cache Updated',
+          `Fetched ${res.downloaded} cloud templates (${res.added} new templates added to local store for offline verification).`
+        );
+      }
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -158,6 +177,14 @@ export default function HomeScreen() {
           loading={syncing}
           disabled={unsyncedCount === 0}
           onPress={onSync}
+          hideChevron
+        />
+        <ListRow
+          icon="download"
+          title="Download from cloud"
+          subtitle="Pre-warms local cache from AWS for offline verification"
+          loading={downloading}
+          onPress={onDownloadCloud}
           hideChevron
         />
         <ListRow

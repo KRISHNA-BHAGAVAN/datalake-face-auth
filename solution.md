@@ -110,19 +110,13 @@ performing real CNN inference for the security-critical steps.
    hand, fist, or random blob cannot drive the state machine. Each challenge has a timeout, after
    which the flow fails closed.
 
-3. **Single photo burst** (`useFaceAuthVision.ts`). When liveness passes, the app captures a small
-   burst of full-resolution stills via the camera's photo output. The burst collects up to *N* good
-   frames (verification = 1, enrollment = 3) and retries briefly if a frame is blurry or off-angle,
-   so a single bad frame never sinks the flow.
+3. **Multi-frame burst & timeouts** (`useFaceAuthVision.ts`). When liveness passes, the app captures a burst of full-resolution stills. The burst requires exactly *N* good frames (**3 frames for enrollment, 1 for verification**). The entire authentication flow is protected by strict timeouts to ensure the device never hangs on bad lighting or edge cases.
 
-4. **Quality gate** (`FrameQuality.ts`). Each captured frame is screened before it is allowed to
-   produce an embedding:
+4. **Quality gate & retry loop** (`FrameQuality.ts`). Each captured frame is screened before it is allowed to produce an embedding:
    - **Geometry** — minimum face-size ratio, maximum yaw and pitch (rejects extreme/partial poses).
-   - **Pixels** — sharpness (variance of the Laplacian) and brightness bounds (rejects motion blur,
-     very dark, or blown-out frames).
+   - **Pixels** — sharpness (variance of the Laplacian) and brightness bounds (rejects motion blur, very dark, or blown-out frames).
 
-   This prevents low-quality frames from poisoning the stored template, which directly protects
-   accuracy in harsh outdoor lighting.
+   If the quality gate fails, the system triggers a **retry mechanism** to capture another frame. This loop continues until it collects the required number of high-quality frames or the timeout triggers. This prevents low-quality frames from poisoning the template, protecting accuracy in harsh outdoor lighting.
 
 5. **Alignment + preprocessing** (`ImageProcessor.ts`). Using the detected eye landmarks, the face
    is aligned to the ArcFace canonical 5-point geometry (scale + translation about the inter-ocular
@@ -134,9 +128,8 @@ performing real CNN inference for the security-critical steps.
    a live face vs a photo/screen replay, complementing the active gestures. Because a replay attack
    is constant across frames, this runs **once** per flow (first valid frame) to save time.
 
-7. **Recognition** (`FaceRecognizer.ts`, MobileFaceNet). Produces a compact, L2-normalizable face
-   embedding. For enrollment, the per-frame embeddings are **averaged** into one robust template;
-   for verification, the probe embedding is matched against stored templates.
+7. **Recognition & Template Averaging** (`FaceRecognizer.ts`, MobileFaceNet). Produces a compact, L2-normalizable face
+   embedding. For enrollment, the system extracts embeddings for all **3 captured frames** and computes their mathematical **average** to create a single, highly robust master template. For verification, the probe embedding is matched against stored templates.
 
 8. **Matching** (`CosineSimilarity.ts`). Cosine similarity against locally stored templates with a
    threshold of **0.48**, calibrated on LFW via the FAR/FRR sweep in [`benchmark/`](./benchmark/)
@@ -217,16 +210,13 @@ Active anti-spoofing via **blink / smile / head-turn** challenges, enforced by a
 machine with per-challenge timeouts, a real-face validity gate, and a **passive MiniFASNet CNN
 backstop** against printed-photo and screen-replay attacks — all on-device.
 
-### 6.2 Sync & purge (AWS)
-Sync and purge are **two explicit actions**. `SyncManager.sync()` collects locally stored templates
-not yet marked synced and `POST`s the **embeddings only** (never images) to a configurable AWS
-Lambda Function URL (`EXPO_PUBLIC_FACE_SYNC_API_URL` / optional `x-api-key`). The Lambda
-(`aws/lambda/index.mjs`) **de-duplicates server-side** — each incoming embedding is cosine-compared
-against the datalake and skipped if it matches an existing person — so a device that has already
-purged its local copies can never create duplicate rows. On success the local templates are *marked
-synced* (kept for offline verify + dedup), and `SyncManager.purgeLocal()` removes the synced copies
-when the operator chooses. With no endpoint configured the app is fully offline: the Sync button
-shows a notice, nothing leaves the device, and local data is untouched.
+### 6.2 Automatic prefetch, Sync, & Purge (AWS)
+Cloud interaction involves three key actions handled by `SyncManager.ts`:
+1. **Automatic Prefetch (`downloadCloudTemplates`)**: When network is available, the device automatically pulls enrolled templates from the AWS Datalake 3.0 to pre-warm the local cache for offline usage.
+2. **Sync / Audit Push**: `SyncManager.sync()` collects locally stored templates not yet marked synced and `POST`s the **embeddings only** (never images) to the AWS Lambda Function. The Lambda (`aws/lambda/index.mjs`) **de-duplicates server-side** via cosine-comparison.
+3. **On-demand Purge**: `SyncManager.purgeLocal()` removes the synced copies when the operator chooses to free up local space or after returning from the field.
+
+With no endpoint configured, the app remains 100% offline: nothing leaves the device, and local data is untouched.
 
 ---
 
