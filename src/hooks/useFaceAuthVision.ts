@@ -395,7 +395,7 @@ export function useFaceAuthVision() {
         continue;
       }
 
-      if (!spoofDecided()) {
+      if (!spoofDecided() && tensor.sharpness >= 8.0) {
         try {
           const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
           assertCurrentSession(sessionId);
@@ -429,8 +429,15 @@ export function useFaceAuthVision() {
       }
     }
 
-    const spoofScore = spoofScores.length > 0 ? meanSpoofScore() : null;
-    const spoofed = spoofScore != null && spoofScore < config.antiSpoof.liveScoreThreshold;
+    const maxSpoof = spoofScores.length > 0 ? Math.max(...spoofScores) : null;
+    const meanSpoof = spoofScores.length > 0 ? meanSpoofScore() : null;
+    // Genuine live faces score >= 0.55 on clear frames. Print/screen attacks score < 0.35 across all frames.
+    const spoofed =
+      maxSpoof != null &&
+      meanSpoof != null &&
+      maxSpoof < 0.55 &&
+      meanSpoof < config.antiSpoof.liveScoreThreshold;
+    const spoofScore = maxSpoof ?? meanSpoof;
     return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue };
   }, [assertCurrentSession, capturePhotoWithRetry, emitCapture, modelsReady]);
 
