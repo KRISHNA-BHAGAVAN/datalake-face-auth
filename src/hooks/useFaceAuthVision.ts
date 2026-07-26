@@ -282,11 +282,14 @@ export function useFaceAuthVision() {
       spoofScores.reduce((a, b) => a + b, 0) / spoofScores.length;
 
     const spoofDecided = () => {
-      const { maxChecks, confidentLiveScore, confidentSpoofScore } = config.antiSpoof;
+      const { maxChecks, confidentLiveScore } = config.antiSpoof;
       if (spoofScores.length === 0) return false;
       if (spoofScores.length >= maxChecks) return true;
       const mean = meanSpoofScore();
-      return mean >= confidentLiveScore || mean <= confidentSpoofScore;
+      // Only short-circuit on confident LIVE score. NEVER short-circuit on confident spoof
+      // score because a single blurry/noisy first frame can easily yield a false confident spoof
+      // score (e.g. 0.15) for a real human face, preventing checks on subsequent clearer frames.
+      return mean >= confidentLiveScore;
     };
 
     const maxAttempts = wanted + config.antiSpoof.maxChecks;
