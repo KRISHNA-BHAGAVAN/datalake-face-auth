@@ -31,6 +31,7 @@ export function CameraFlow({ mode }: Props) {
     subscribeCapture,
     confidence,
     latencyMs,
+    benchmarkMetrics,
     modelsReady,
     modelError,
     device,
@@ -170,7 +171,8 @@ export function CameraFlow({ mode }: Props) {
           title={resultTitle}
           message={message}
           confidence={mode === 'VERIFY' ? confidence : null}
-          latencyMs={mode === 'VERIFY' ? latencyMs : null}
+          latencyMs={latencyMs}
+          benchmarkMetrics={benchmarkMetrics}
           threshold={config.recognition.cosineSimilarityThreshold}
           onRetry={() => {
             reset();

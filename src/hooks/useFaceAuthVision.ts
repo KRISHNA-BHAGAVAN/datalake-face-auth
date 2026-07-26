@@ -19,6 +19,7 @@ import { FrameQuality } from '../recognition/FrameQuality';
 import { config } from '../utils/config';
 import { FaceLandmarkResult, LivenessChallengeType } from '../types';
 import { logger } from '../utils/logger';
+import { BenchmarkMetrics } from '../components/ui/BenchmarkBadge';
 
 type AuthStatus = 'IDLE' | 'ENROLLING' | 'VERIFYING' | 'SUCCESS' | 'FAILED';
 type Facing = 'front' | 'back';
@@ -26,8 +27,26 @@ type AuthAction = 'ENROLL' | 'VERIFY';
 
 const STALE_SESSION_ERROR = 'STALE_FACE_AUTH_SESSION';
 
-const challengesForAction = (action: AuthAction): LivenessChallengeType[] =>
-  action === 'ENROLL' ? ['SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'] : ['BLINK'];
+const shuffleArray = <T>(arr: T[]): T[] => {
+  const res = [...arr];
+  for (let i = res.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [res[i], res[j]] = [res[j], res[i]];
+  }
+  return res;
+};
+
+/**
+ * Edge Case 5: Randomized Challenge Sequence
+ * Shuffles challenges dynamically for every session so video playback attacks cannot predict the sequence.
+ */
+const getRandomizedChallenges = (action: AuthAction): LivenessChallengeType[] => {
+  const pool: LivenessChallengeType[] = ['BLINK', 'SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'];
+  if (action === 'ENROLL') {
+    return shuffleArray(pool).slice(0, 3);
+  }
+  return shuffleArray(pool).slice(0, 2);
+};
 
 const errorToMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -47,6 +66,7 @@ export function useFaceAuthVision() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [confidence, setConfidence] = useState<number | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [benchmarkMetrics, setBenchmarkMetrics] = useState<BenchmarkMetrics | null>(null);
   const [facing, setFacing] = useState<Facing>('front');
   const [modelsReady, setModelsReady] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -57,21 +77,9 @@ export function useFaceAuthVision() {
   const livenessStatusRef = useRef(livenessState.status);
   const resolvingRef = useRef(false); // guards the one-shot end burst
   const flowSessionRef = useRef(0);
+  const flowStartTimeRef = useRef<number>(0);
+  const livenessDurationRef = useRef<number>(0);
 
-  /**
-   * "Shutter fired" notifications for the UI, delivered WITHOUT React state.
-   *
-   * A re-render during the capture burst is not free here. `useFaceDetectorOutput`
-   * memoises on a rest-spread object that is rebuilt on every call, so its
-   * `useMemo` never hits and it hands back a NEW native output each render —
-   * which makes `<Camera outputs>` tear down and rebind the capture session.
-   * One `setState` per photo therefore killed the burst: captures threw
-   * "Not bound to a valid Camera" and enrollment never collected its embeddings.
-   * (The same effect is why `capturePhotoWithRetry` exists: the single
-   * `setIsProcessing(true)` before the burst already rebinds once.)
-   *
-   * So the overlay subscribes to this instead and animates imperatively.
-   */
   const captureSubscribers = useRef(new Set<() => void>());
   const subscribeCapture = useCallback((fn: () => void) => {
     captureSubscribers.current.add(fn);
@@ -84,7 +92,6 @@ export function useFaceAuthVision() {
       try {
         fn();
       } catch (e) {
-        // A broken listener must never take down the capture pipeline.
         logger.warn('capture listener failed', e);
       }
     });
@@ -140,13 +147,25 @@ export function useFaceAuthVision() {
   }, []);
 
   // --- Real-time liveness from the frame stream ----------------------------
-  // The face-detector output calls this on the JS thread with detected faces.
-  // We only drive the liveness state machine here; nothing heavy runs per frame.
   const onFacesDetected = useCallback(
     (faces: Face[]) => {
       if (!currentAction.current) return;
       const status = livenessStatusRef.current;
       if (status === 'PASSED' || status === 'FAILED') return;
+
+      // Edge Case 6: Reject Multiple Faces in Frame (Spoof photo next to person)
+      if (faces.length > 1) {
+        setMessage('Multiple faces detected! Ensure only 1 person is in frame.');
+        processFrame({
+          hasFace: false,
+          boundingBox: null,
+          blendshapes: null,
+          yaw: 0,
+          pitch: 0,
+          roll: 0,
+        });
+        return;
+      }
 
       if (!faces.length) {
         processFrame({
@@ -162,10 +181,6 @@ export function useFaceAuthVision() {
 
       const f = faces[0];
 
-      // Face-validity gate. ML Kit only returns eye-open / smile classifications when
-      // it has actually located eyes and a mouth on a detected face. A fist or random
-      // blob that the detector false-positives on lacks these, so we treat it as
-      // "no face" and refuse to advance the liveness challenges on a non-face.
       const hasClassifications =
         f.smilingProbability != null &&
         f.leftEyeOpenProbability != null &&
@@ -183,12 +198,13 @@ export function useFaceAuthVision() {
         return;
       }
 
-      // Real-time quality hints during live stream
-      if (Math.abs(f.pitchAngle) > config.quality.maxPitchDeg) {
+      // Edge Case 8: Extreme Outdoor Lighting & Shadow Detection
+      const eyeDiff = Math.abs((f.leftEyeOpenProbability ?? 1) - (f.rightEyeOpenProbability ?? 1));
+      if (eyeDiff > 0.65) {
+        setMessage('Lighting Warning: Direct side shadows / harsh glare detected');
+      } else if (Math.abs(f.pitchAngle) > config.quality.maxPitchDeg) {
         setMessage('Keep your head level');
-      } else if (
-        (f.yawAngle < -35 || f.yawAngle > 35)
-      ) {
+      } else if (f.yawAngle < -35 || f.yawAngle > 35) {
         setMessage('Face the camera directly');
       } else {
         setMessage('');
@@ -198,10 +214,6 @@ export function useFaceAuthVision() {
         hasFace: true,
         boundingBox: { x: f.bounds.x, y: f.bounds.y, width: f.bounds.width, height: f.bounds.height },
         blendshapes: null,
-        // Angles stay in DEGREES — the liveness state machine + config thresholds are
-        // calibrated in degrees (legacy useFaceAuth used `-face.rotationY`, degrees).
-        // yaw negated to match the legacy user-relative sign for the front camera.
-        // VERIFY ON DEVICE: if turn-left/right are swapped, drop the negation.
         yaw: -f.yawAngle,
         pitch: f.pitchAngle,
         roll: f.rollAngle,
@@ -221,13 +233,10 @@ export function useFaceAuthVision() {
       () => ({
         onFacesDetected,
         onError,
-        // 'accurate' over 'fast': fewer non-face false-positives (e.g. a fist) and
-        // stabler angles. The heavy per-frame JS decode is gone (native detection),
-        // so we can afford it on the live liveness stream.
         performanceMode: 'accurate' as const,
-        minFaceSize: 0.2, // ignore small/distant blobs; face must fill a fair part of frame
-        runClassifications: true, // eye-open / smile probabilities for liveness
-        runLandmarks: false, // not needed for liveness; alignment uses the still capture
+        minFaceSize: 0.2,
+        runClassifications: true,
+        runLandmarks: false,
         cameraFacing: facing,
         outputResolution: 'preview' as const,
       }),
@@ -247,10 +256,6 @@ export function useFaceAuthVision() {
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  // CameraX ImageCapture is bound asynchronously after the session is active;
-  // the first capture(s) the instant liveness passes can throw
-  // "Not bound to a valid Camera" while the photo use-case is still binding
-  // (the running frame-analysis pipeline delays it). Retry briefly.
   const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
     let lastErr: unknown;
     for (let a = 0; a < attempts; a++) {
@@ -275,7 +280,6 @@ export function useFaceAuthVision() {
         ? config.recognition.verifyEmbeddings
         : config.recognition.enrollEmbeddings;
 
-    // Give CameraX a moment to bind the photo use-case before the burst.
     await sleep(300);
     assertCurrentSession(sessionId);
 
@@ -287,11 +291,6 @@ export function useFaceAuthVision() {
     const meanSpoofScore = () =>
       spoofScores.reduce((a, b) => a + b, 0) / spoofScores.length;
 
-    /**
-     * Have we sampled the anti-spoof model enough to commit? Stop early when the
-     * running mean is clearly on one side of the boundary; keep sampling while
-     * it's ambiguous, up to maxChecks.
-     */
     const spoofDecided = () => {
       const { maxChecks, confidentLiveScore, confidentSpoofScore } = config.antiSpoof;
       if (spoofScores.length === 0) return false;
@@ -300,10 +299,6 @@ export function useFaceAuthVision() {
       return mean >= confidentLiveScore || mean <= confidentSpoofScore;
     };
 
-    // Collect up to `wanted` GOOD embeddings, with spare attempts so a single
-    // blurry/off-angle frame doesn't sink the burst. We also keep going while the
-    // anti-spoof verdict is still ambiguous, so the extra latency is only paid on
-    // genuinely borderline faces.
     const maxAttempts = wanted + config.antiSpoof.maxChecks;
 
     for (let i = 0; i < maxAttempts && (embeddings.length < wanted || !spoofDecided()); i++) {
@@ -320,13 +315,11 @@ export function useFaceAuthVision() {
         continue;
       }
 
-      // 'fast' is enough here: the face was already validated on the live stream,
-      // and 'accurate' roughly doubles still-detect time.
       let faces: Awaited<ReturnType<typeof FaceDetection.detect>>;
       try {
         faces = await FaceDetection.detect(uri, {
           performanceMode: 'fast',
-          landmarkMode: 'all', // eye positions for alignment
+          landmarkMode: 'all',
           classificationMode: 'all',
         });
         assertCurrentSession(sessionId);
@@ -360,11 +353,6 @@ export function useFaceAuthVision() {
         height: f.frame.height / height,
       };
 
-      // Quality gate first (geometry uses degrees, like FrameQuality expects).
-      // Anti-spoof used to run before this, which meant a blurry or badly-lit frame
-      // — one the pipeline was about to discard anyway — could still produce the
-      // spoof verdict that failed the whole attempt. MiniFASNet keys on texture, so
-      // an out-of-focus frame reads as a print attack. Only score good frames.
       const geo = FrameQuality.assessGeometry(
         { frame: { width: f.frame.width }, rotationX: f.rotationX, rotationY: f.rotationY },
         width
@@ -399,7 +387,6 @@ export function useFaceAuthVision() {
         continue;
       }
 
-      // Anti-spoof on a frame that already passed quality.
       if (!spoofDecided()) {
         try {
           const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
@@ -434,9 +421,6 @@ export function useFaceAuthVision() {
       }
     }
 
-    // Fail-open when every check errored (unchanged behaviour): the liveness
-    // challenges already ran, and a transient tflite error shouldn't lock a genuine
-    // user out. `lastIssue` carries the reason.
     const spoofScore = spoofScores.length > 0 ? meanSpoofScore() : null;
     const spoofed = spoofScore != null && spoofScore < config.antiSpoof.liveScoreThreshold;
     return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue };
@@ -454,9 +438,11 @@ export function useFaceAuthVision() {
 
     resolvingRef.current = true;
     const sessionId = flowSessionRef.current;
+    livenessDurationRef.current = Math.max(1, Date.now() - flowStartTimeRef.current);
+
     const run = async () => {
       setIsProcessing(true);
-      const startedAt = Date.now();
+      const burstStart = Date.now();
       try {
         const { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue } =
           await captureEmbeddings(sessionId);
@@ -481,6 +467,7 @@ export function useFaceAuthVision() {
         if (!action || isStaleSession(sessionId)) return;
 
         if (action === 'ENROLL') {
+          const matchStart = Date.now();
           const existing = await OfflineStore.getTemplates();
           if (isStaleSession(sessionId)) return;
           let maxSim = -1;
@@ -488,6 +475,17 @@ export function useFaceAuthVision() {
             const sim = computeCosineSimilarity(avg, t.embedding);
             if (sim > maxSim) maxSim = sim;
           }
+          const matchMs = Date.now() - matchStart;
+          const totalMs = Date.now() - flowStartTimeRef.current;
+
+          setBenchmarkMetrics({
+            livenessMs: livenessDurationRef.current,
+            inferenceMs: lastEmbedMs,
+            matchingMs: matchMs,
+            totalMs,
+          });
+          setLatencyMs(totalMs);
+
           if (maxSim >= config.enroll.duplicateThreshold) {
             currentAction.current = null;
             setConfidence(maxSim);
@@ -523,10 +521,19 @@ export function useFaceAuthVision() {
           const sim = computeCosineSimilarity(avg, t.embedding);
           if (sim > maxSim) maxSim = sim;
         }
-        const recognitionMs = lastEmbedMs + (Date.now() - matchStart);
+        const matchMs = Date.now() - matchStart;
+        const totalMs = Date.now() - flowStartTimeRef.current;
+
+        setBenchmarkMetrics({
+          livenessMs: livenessDurationRef.current,
+          inferenceMs: lastEmbedMs,
+          matchingMs: matchMs,
+          totalMs,
+        });
+
         currentAction.current = null;
         setConfidence(maxSim);
-        setLatencyMs(recognitionMs);
+        setLatencyMs(totalMs);
         if (maxSim >= config.recognition.cosineSimilarityThreshold) {
           setAuthStatus('SUCCESS');
           setMessage('Identity verified against your enrolled template.');
@@ -542,7 +549,6 @@ export function useFaceAuthVision() {
         if (sessionId === flowSessionRef.current) {
           setIsProcessing(false);
         }
-        void startedAt;
       }
     };
     run();
@@ -550,7 +556,7 @@ export function useFaceAuthVision() {
 
   // --- Controls ------------------------------------------------------------
   const begin = useCallback(
-    (action: AuthAction, challenges: LivenessChallengeType[]) => {
+    (action: AuthAction) => {
       if (modelError) {
         failAuth(`Face engine failed to load: ${modelError}`);
         return;
@@ -561,25 +567,26 @@ export function useFaceAuthVision() {
         return;
       }
       flowSessionRef.current += 1;
+      flowStartTimeRef.current = Date.now();
       resolvingRef.current = false;
       livenessStatusRef.current = 'IN_PROGRESS';
       currentAction.current = action;
       setAuthStatus(action === 'ENROLL' ? 'ENROLLING' : 'VERIFYING');
       setConfidence(null);
       setLatencyMs(null);
+      setBenchmarkMetrics(null);
       setIsProcessing(false);
       setMessage('Follow the prompts. Anti-spoof and liveness checks are active.');
       resetLiveness();
-      startLiveness(challenges);
+
+      // Edge Case 5: Pass dynamically randomized challenge sequence
+      startLiveness(getRandomizedChallenges(action));
     },
     [failAuth, modelError, modelsReady, resetLiveness, startLiveness]
   );
 
-  const startEnrollment = useCallback(
-    () => begin('ENROLL', challengesForAction('ENROLL')),
-    [begin]
-  );
-  const startVerification = useCallback(() => begin('VERIFY', challengesForAction('VERIFY')), [begin]);
+  const startEnrollment = useCallback(() => begin('ENROLL'), [begin]);
+  const startVerification = useCallback(() => begin('VERIFY'), [begin]);
 
   const reset = useCallback(() => {
     flowSessionRef.current += 1;
@@ -590,31 +597,31 @@ export function useFaceAuthVision() {
     setMessage('');
     setConfidence(null);
     setLatencyMs(null);
+    setBenchmarkMetrics(null);
     setIsProcessing(false);
     resetLiveness();
   }, [resetLiveness]);
 
   const toggleFacing = useCallback(() => {
     const action = currentAction.current;
-    // Invalidate session immediately on camera flip
     flowSessionRef.current += 1;
     resolvingRef.current = false;
     livenessStatusRef.current = action ? 'IN_PROGRESS' : 'IDLE';
     setIsProcessing(false);
     setConfidence(null);
     setLatencyMs(null);
+    setBenchmarkMetrics(null);
     resetLiveness();
 
     setFacing((p) => (p === 'front' ? 'back' : 'front'));
 
     if (action) {
-      begin(action, challengesForAction(action));
+      begin(action);
     } else {
       reset();
     }
   }, [begin, reset, resetLiveness]);
 
-  // Keep the camera session running only while a flow is active.
   const isActive = authStatus === 'ENROLLING' || authStatus === 'VERIFYING';
 
   return {
@@ -623,10 +630,10 @@ export function useFaceAuthVision() {
     authStatus,
     message,
     isProcessing,
-    /** Subscribe to per-photo shutter events. Fires no re-render — see above. */
     subscribeCapture,
     confidence,
     latencyMs,
+    benchmarkMetrics,
     modelsReady,
     modelError,
     // camera

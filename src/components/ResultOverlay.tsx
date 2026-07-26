@@ -8,6 +8,7 @@ import { Card } from './ui/Card';
 import { DataRow } from './ui/List';
 import { Icon } from './ui/Icon';
 import { ConfidenceMeter } from './ConfidenceMeter';
+import { BenchmarkBadge, BenchmarkMetrics } from './ui/BenchmarkBadge';
 
 interface Props {
   status: 'SUCCESS' | 'FAILED';
@@ -18,6 +19,7 @@ interface Props {
   threshold?: number;
   /** End-to-end recognition time in ms (verify only). */
   latencyMs?: number | null;
+  benchmarkMetrics?: BenchmarkMetrics | null;
   onRetry?: () => void;
   onDone: () => void;
 }
@@ -34,6 +36,7 @@ export function ResultOverlay({
   confidence,
   threshold = config.recognition.cosineSimilarityThreshold,
   latencyMs,
+  benchmarkMetrics,
   onRetry,
   onDone,
 }: Props) {
@@ -71,15 +74,10 @@ export function ResultOverlay({
             <Text style={[type.secondary, styles.message]}>{message}</Text>
           </View>
 
-          {confidence != null && (
+          {(confidence != null || latencyMs != null || benchmarkMetrics != null) && (
             <Card style={styles.metrics}>
-              <ConfidenceMeter value={confidence} threshold={threshold} />
-              {latencyMs != null && (
-                <>
-                  <View style={styles.divider} />
-                  <DataRow label="Recognition time" value={`${(latencyMs / 1000).toFixed(2)}s`} />
-                </>
-              )}
+              {confidence != null && <ConfidenceMeter value={confidence} threshold={threshold} />}
+              <BenchmarkBadge metrics={benchmarkMetrics || null} latencyMs={latencyMs} />
             </Card>
           )}
         </Animated.View>
@@ -119,3 +117,4 @@ const styles = StyleSheet.create({
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   actions: { gap: spacing.md, paddingBottom: spacing.lg },
 });
+
