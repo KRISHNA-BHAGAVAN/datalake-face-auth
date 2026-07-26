@@ -54,7 +54,7 @@ export class ImageProcessor {
       normalizedBoundingBox,
       photoWidth,
       photoHeight,
-      0.2
+      0.15
     );
     const pixels = await ImageProcessor.cropResizeDecode(
       photoUri,

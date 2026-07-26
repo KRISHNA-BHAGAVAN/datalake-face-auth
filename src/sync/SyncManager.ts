@@ -1,5 +1,5 @@
 import { OfflineStore } from '../storage/OfflineStore';
-import { SyncResult } from '../types';
+import { FaceTemplate, SyncResult } from '../types';
 import { logger } from '../utils/logger';
 
 const SYNC_API_URL = process.env.EXPO_PUBLIC_FACE_SYNC_API_URL;
@@ -54,8 +54,7 @@ export class SyncManager {
         ? result.duplicates.length
         : 0;
 
-      // Everything we sent now lives in the datalake (inserted or matched an
-      // existing person), so mark all of it synced locally.
+      // Everything we sent now lives in the datalake, mark all synced locally.
       for (const template of unsynced) {
         await OfflineStore.markSynced(template.id);
       }
@@ -69,6 +68,59 @@ export class SyncManager {
       return {
         synced: 0,
         error: error instanceof Error ? error.message : 'Sync failed',
+      };
+    }
+  }
+
+  /**
+   * Downloads enrolled face templates from AWS cloud datalake and merges them locally.
+   * Useful for pre-warming cache on field devices or post-purge offline preparation.
+   */
+  static async downloadCloudTemplates(): Promise<{ downloaded: number; added: number; error?: string }> {
+    if (!SYNC_API_URL) {
+      return {
+        downloaded: 0,
+        added: 0,
+        error: 'Set EXPO_PUBLIC_FACE_SYNC_API_URL in .env to enable AWS sync.',
+      };
+    }
+
+    try {
+      const response = await fetch(SYNC_API_URL, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(SYNC_API_KEY ? { 'x-api-key': SYNC_API_KEY } : {}),
+        },
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Cloud download failed (${response.status}): ${body}`);
+      }
+
+      const result = await response.json().catch(() => ({}));
+      const templates: FaceTemplate[] = Array.isArray(result?.templates)
+        ? result.templates.map((item: any) => ({
+            id: String(item.id || `cloud-${Date.now()}`),
+            embedding: Array.isArray(item.embedding) ? item.embedding : [],
+            createdAt: Number(item.createdAt || Date.now()),
+            isSynced: true,
+          }))
+        : [];
+
+      const added = await OfflineStore.mergeCloudTemplates(templates);
+
+      return {
+        downloaded: templates.length,
+        added,
+      };
+    } catch (error) {
+      logger.error('SyncManager: Cloud download failed', error);
+      return {
+        downloaded: 0,
+        added: 0,
+        error: error instanceof Error ? error.message : 'Cloud download failed',
       };
     }
   }

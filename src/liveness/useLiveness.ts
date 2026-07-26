@@ -3,16 +3,23 @@ import { LivenessStateMachine } from './LivenessStateMachine';
 import { FaceLandmarkResult, LivenessChallengeType, LivenessState } from '../types';
 
 export function useLiveness() {
-  const stateMachineRef = useRef(new LivenessStateMachine());
-  const [livenessState, setLivenessState] = useState<LivenessState>(stateMachineRef.current.getState());
+  const stateMachineRef = useRef<LivenessStateMachine | null>(null);
+  if (!stateMachineRef.current) {
+    stateMachineRef.current = new LivenessStateMachine();
+  }
+
+  const [livenessState, setLivenessState] = useState<LivenessState>(() =>
+    stateMachineRef.current!.getState()
+  );
 
   const startLiveness = useCallback((challenges: LivenessChallengeType[] = ['BLINK', 'TURN_HEAD_LEFT', 'SMILE']) => {
+    if (!stateMachineRef.current) return;
     stateMachineRef.current.startChallenges(challenges);
     setLivenessState(stateMachineRef.current.getState());
   }, []);
 
   const processFrame = useCallback((result: FaceLandmarkResult) => {
-    // Only update react state if the internal state machine changed status or message, to avoid excessive re-renders
+    if (!stateMachineRef.current) return;
     const oldState = stateMachineRef.current.getState();
     const newState = stateMachineRef.current.processFrame(result);
     
@@ -26,6 +33,7 @@ export function useLiveness() {
   }, []);
 
   const resetLiveness = useCallback(() => {
+    if (!stateMachineRef.current) return;
     stateMachineRef.current.reset();
     setLivenessState(stateMachineRef.current.getState());
   }, []);

@@ -20,6 +20,7 @@ const ICONS = {
   antiSpoof: { ios: 'checkmark.shield', android: 'shield', web: 'shield' },
   liveness: { ios: 'eye', android: 'visibility', web: 'visibility' },
   upload: { ios: 'icloud.and.arrow.up', android: 'cloud_upload', web: 'cloud_upload' },
+  download: { ios: 'icloud.and.arrow.down', android: 'cloud_download', web: 'cloud_download' },
   removeLocal: { ios: 'minus.circle', android: 'remove_circle', web: 'remove_circle' },
   delete: { ios: 'trash', android: 'delete', web: 'delete' },
   info: { ios: 'info.circle', android: 'info', web: 'info' },
