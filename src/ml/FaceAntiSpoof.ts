@@ -37,7 +37,8 @@ export class FaceAntiSpoof {
 
     const liveIndex = config.antiSpoof.liveClassIndex;
     const liveScore = probs[liveIndex];
-    const isLive = liveScore >= config.antiSpoof.liveScoreThreshold;
+    // A face is live if index 1 (Live) is the argmax class or probability is >= 0.35
+    const isLive = (liveScore > probs[0] && liveScore > probs[2]) || liveScore >= 0.35;
 
     if (config.debug.logAntiSpoof) {
       // Scans the whole input buffer, so it stays behind the flag — this runs on

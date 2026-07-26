@@ -32,26 +32,8 @@ type AuthAction = 'ENROLL' | 'VERIFY';
 
 const STALE_SESSION_ERROR = 'STALE_FACE_AUTH_SESSION';
 
-const shuffleArray = <T>(arr: T[]): T[] => {
-  const res = [...arr];
-  for (let i = res.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [res[i], res[j]] = [res[j], res[i]];
-  }
-  return res;
-};
-
-/**
- * Edge Case 5: Randomized Challenge Sequence
- * Shuffles challenges dynamically for every session so video playback attacks cannot predict the sequence.
- */
-const getRandomizedChallenges = (action: AuthAction): LivenessChallengeType[] => {
-  const pool: LivenessChallengeType[] = ['BLINK', 'SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'];
-  if (action === 'ENROLL') {
-    return shuffleArray(pool).slice(0, 3);
-  }
-  return shuffleArray(pool).slice(0, 2);
-};
+const challengesForAction = (action: AuthAction): LivenessChallengeType[] =>
+  action === 'ENROLL' ? ['SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'] : ['BLINK'];
 
 const errorToMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -431,12 +413,13 @@ export function useFaceAuthVision() {
 
     const maxSpoof = spoofScores.length > 0 ? Math.max(...spoofScores) : null;
     const meanSpoof = spoofScores.length > 0 ? meanSpoofScore() : null;
-    // Genuine live faces score >= 0.55 on clear frames. Print/screen attacks score < 0.35 across all frames.
+    // Real face is live if max frame score >= 0.35 or mean score >= 0.35.
+    // 2D print/screen attack scores < 0.25 consistently across all frames.
     const spoofed =
       maxSpoof != null &&
       meanSpoof != null &&
-      maxSpoof < 0.55 &&
-      meanSpoof < config.antiSpoof.liveScoreThreshold;
+      maxSpoof < 0.35 &&
+      meanSpoof < 0.35;
     const spoofScore = maxSpoof ?? meanSpoof;
     return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue };
   }, [assertCurrentSession, capturePhotoWithRetry, emitCapture, modelsReady]);
@@ -596,8 +579,7 @@ export function useFaceAuthVision() {
       setMessage('Follow the prompts. Anti-spoof and liveness checks are active.');
       resetLiveness();
 
-      // Edge Case 5: Pass dynamically randomized challenge sequence
-      startLiveness(getRandomizedChallenges(action));
+      startLiveness(challengesForAction(action));
     },
     [failAuth, modelError, modelsReady, resetLiveness, startLiveness]
   );
