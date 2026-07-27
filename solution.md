@@ -232,14 +232,46 @@ With no endpoint configured, the app remains 100% offline: nothing leaves the de
 
 ---
 
-## 8. Integration into Datalake 3.0
+## 8. Integration into NHAI DataLake 3.0
 
-The module is self-contained under `src/` and exposes a single hook, `useFaceAuthVision()`, with a
-small surface (`startEnrollment`, `startVerification`, `livenessState`, `authStatus`, `confidence`,
-`reset`). The host app renders `CameraFlow` for an enroll or verify screen and reads the result.
-Required native modules are standard autolinked RN/Expo packages; the only app-config additions are
-the camera permission (already present) and `newArchEnabled: true`. A legacy `expo-camera` +
-ML-Kit implementation (`useFaceAuth`) is retained as a rollback path.
+### 8.1 NHAI DataLake 3.0 Domain Context
+NHAI DataLake 3.0 is the official mobile application of the National Highways Authority of India, used by field engineers, Authority Engineers (AE/IE), contractors, and site inspectors to manage highway infrastructure projects across remote stretches of the national highway network. A primary operational requirement in zero-network rural corridors is verifying contractor presence and site attendance securely without internet dependency.
+
+### 8.2 Architectural Plug-and-Play Design
+Our module is completely self-contained under `src/` and designed as a plug-and-play addition to NHAI DataLake 3.0's React Native / Expo codebase:
+
+1. **Single Orchestration Hook (`useFaceAuthVision`)**:
+   Exposes a minimal, clean API surface:
+   ```ts
+   const {
+     startEnrollment,
+     startVerification,
+     livenessState,
+     authStatus,
+     confidence,
+     latencyMs,
+     reset
+   } = useFaceAuthVision();
+   ```
+
+2. **Drop-in UI Component (`<CameraFlow />`)**:
+   NHAI DataLake 3.0 screens (e.g., *Site Attendance*, *Inspector Verification*, *Contractor Onboarding*) can render `<CameraFlow />` directly as a full-screen overlay or modal:
+   ```tsx
+   <CameraFlow
+     action={currentAction}
+     onCancel={handleCancel}
+     onComplete={handleAuthSuccess}
+   />
+   ```
+
+3. **Zero-Impact Native Setup**:
+   Required native packages (`react-native-vision-camera`, `react-native-fast-tflite`, `@react-native-ml-kit/face-detection`) use standard React Native autolinking. No custom C++ native modifications are required — only enabling `newArchEnabled: true` and camera permissions in `app.json`.
+
+### 8.3 Offline-to-Online Sync Pipeline for NHAI DataLake
+- **Field Operation (Offline)**: Enrolls and verifies contractors using on-device ML Kit fast detection (<15ms) + 3-photo burst template averaging, persisting 512-byte float32 vectors in `expo-secure-store`.
+- **HQ Sync (Online)**: When field personnel return to network coverage, `SyncManager.sync()` uploads numeric embeddings to the NHAI DataLake backend via a lightweight REST/Lambda API.
+- **Server-Side De-duplication**: The NHAI central backend checks candidate vectors against the datalake registry (cosine threshold ≥ 0.45) to prevent duplicate profiles for the same contractor across different highway packages.
+- **Local Storage Purging**: `SyncManager.purgeLocal()` frees local storage on shared field tablets once sync confirmation is received.
 
 ---
 
