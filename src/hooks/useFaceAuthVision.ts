@@ -94,6 +94,8 @@ export function useFaceAuthVision() {
   }, []);
 
   const liveCapturedPhotosRef = useRef<Array<Awaited<ReturnType<typeof capturePhotoWithRetry>>>>([]);
+  const poseCapturedRef = useRef<{ STRAIGHT?: boolean; LEFT?: boolean; RIGHT?: boolean }>({});
+  const isCapturingPoseRef = useRef(false);
 
   useEffect(() => {
     livenessStatusRef.current = livenessState.status;
@@ -144,26 +146,27 @@ export function useFaceAuthVision() {
     setMessage(userMessage);
   }, []);
 
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
+    let lastErr: unknown;
+    for (let a = 0; a < attempts; a++) {
+      try {
+        return await photoOutputRef.current.capturePhotoToFile(FACE_AUTH_CAPTURE_SETTINGS, {});
+      } catch (e) {
+        lastErr = e;
+        await sleep(delayMs);
+      }
+    }
+    throw lastErr;
+  }, []);
+
   // --- Real-time liveness from the frame stream ----------------------------
   const onFacesDetected = useCallback(
     (faces: Face[]) => {
       if (!currentAction.current) return;
       const status = livenessStatusRef.current;
       if (status === 'PASSED' || status === 'FAILED') return;
-
-      // Edge Case 6: Reject Multiple Faces in Frame (Spoof photo next to person)
-      if (faces.length > 1) {
-        setMessage('Multiple faces detected! Ensure only 1 person is in frame.');
-        processFrame({
-          hasFace: false,
-          boundingBox: null,
-          blendshapes: null,
-          yaw: 0,
-          pitch: 0,
-          roll: 0,
-        });
-        return;
-      }
 
       if (!faces.length) {
         processFrame({
@@ -177,7 +180,27 @@ export function useFaceAuthVision() {
         return;
       }
 
-      const f = faces[0];
+      // Filter out tiny background false-positives (< 15% frame width or < 40% of main face width)
+      const maxFaceWidth = Math.max(...faces.map((f) => f.bounds.width));
+      const significantFaces = faces.filter(
+        (f) => f.bounds.width >= 0.15 && f.bounds.width >= maxFaceWidth * 0.4
+      );
+
+      // Edge Case 6: Reject Multiple Faces in Frame (Spoof photo next to person)
+      if (significantFaces.length > 1) {
+        setMessage('Multiple faces detected! Ensure only 1 person is in frame.');
+        processFrame({
+          hasFace: false,
+          boundingBox: null,
+          blendshapes: null,
+          yaw: 0,
+          pitch: 0,
+          roll: 0,
+        });
+        return;
+      }
+
+      const f = significantFaces[0];
 
       const hasClassifications =
         f.smilingProbability != null &&
@@ -220,8 +243,38 @@ export function useFaceAuthVision() {
         rightEyeOpenProbability: f.rightEyeOpenProbability,
       };
       processFrame(result);
+
+      // Real-time pose-diverse photo capture during enrollment
+      if (currentAction.current === 'ENROLL' && !isCapturingPoseRef.current) {
+        let poseToCapture: 'STRAIGHT' | 'LEFT' | 'RIGHT' | null = null;
+        if (!poseCapturedRef.current.STRAIGHT && Math.abs(f.yawAngle) <= 10) {
+          poseToCapture = 'STRAIGHT';
+        } else if (!poseCapturedRef.current.LEFT && f.yawAngle <= -12) {
+          poseToCapture = 'LEFT';
+        } else if (!poseCapturedRef.current.RIGHT && f.yawAngle >= 12) {
+          poseToCapture = 'RIGHT';
+        }
+
+        if (poseToCapture) {
+          poseCapturedRef.current[poseToCapture] = true;
+          isCapturingPoseRef.current = true;
+          const targetPose = poseToCapture;
+          capturePhotoWithRetry()
+            .then((photo) => {
+              logger.info(`[POSE_CAPTURE] Captured live pose photo for: ${targetPose}`);
+              liveCapturedPhotosRef.current.push(photo);
+            })
+            .catch((e) => {
+              logger.warn(`[POSE_CAPTURE] Failed to capture pose photo for ${targetPose}`, e);
+              poseCapturedRef.current[targetPose] = false;
+            })
+            .finally(() => {
+              isCapturingPoseRef.current = false;
+            });
+        }
+      }
     },
-    [processFrame]
+    [capturePhotoWithRetry, processFrame]
   );
 
   const onError = useCallback((e: Error) => logger.warn('Face detector error', e), []);
@@ -270,21 +323,6 @@ export function useFaceAuthVision() {
     new Promise<{ width: number; height: number }>((resolve, reject) =>
       Image.getSize(uri, (width, height) => resolve({ width, height }), reject)
     );
-
-  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
-    let lastErr: unknown;
-    for (let a = 0; a < attempts; a++) {
-      try {
-        return await photoOutputRef.current.capturePhotoToFile(FACE_AUTH_CAPTURE_SETTINGS, {});
-      } catch (e) {
-        lastErr = e;
-        await sleep(delayMs);
-      }
-    }
-    throw lastErr;
-  }, []);
 
   useEffect(() => {
     if (currentAction.current === 'ENROLL' && livenessState.justPassedChallenge) {
@@ -745,6 +783,8 @@ export function useFaceAuthVision() {
       flowStartTimeRef.current = Date.now();
       resolvingRef.current = false;
       liveCapturedPhotosRef.current = [];
+      poseCapturedRef.current = {};
+      isCapturingPoseRef.current = false;
       livenessStatusRef.current = 'IN_PROGRESS';
       currentAction.current = action;
       setAuthStatus(action === 'ENROLL' ? 'ENROLLING' : 'VERIFYING');
