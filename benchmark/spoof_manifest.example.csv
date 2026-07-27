@@ -1,0 +1,5 @@
+path,label,attack_type,condition,demographic
+images/live_001.jpg,live,none,daylight,indian_south
+images/print_001.jpg,attack,print,daylight,indian_south
+images/screen_001.jpg,attack,screen,low_light,indian_north
+images/photo_001.jpg,attack,photo,harsh_sunlight,indian_west
