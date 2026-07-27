@@ -63,6 +63,7 @@ export function useFaceAuthVision() {
   const currentAction = useRef<AuthAction | null>(null);
   const livenessStatusRef = useRef(livenessState.status);
   const resolvingRef = useRef(false); // guards the one-shot end burst
+  const earlySpoofCheckedRef = useRef(false);
   const flowSessionRef = useRef(0);
   const flowStartTimeRef = useRef<number>(0);
   const livenessDurationRef = useRef<number>(0);
@@ -132,6 +133,90 @@ export function useFaceAuthVision() {
     setAuthStatus('FAILED');
     setMessage(userMessage);
   }, []);
+
+  const getImageSize = (uri: string) =>
+    new Promise<{ width: number; height: number }>((resolve, reject) =>
+      Image.getSize(uri, (width, height) => resolve({ width, height }), reject)
+    );
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
+    let lastErr: unknown;
+    for (let a = 0; a < attempts; a++) {
+      try {
+        return await photoOutputRef.current.capturePhotoToFile({ enableShutterSound: false }, {});
+      } catch (e) {
+        lastErr = e;
+        await sleep(delayMs);
+      }
+    }
+    throw lastErr;
+  }, []);
+
+  const runEarlyAntiSpoofCheck = useCallback(
+    async (sessionId: number) => {
+      try {
+        const photo = await capturePhotoWithRetry(2, 100);
+        assertCurrentSession(sessionId);
+        const uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
+
+        const faces = await FaceDetection.detect(uri, {
+          performanceMode: 'fast',
+          landmarkMode: 'all',
+          classificationMode: 'none',
+        });
+        assertCurrentSession(sessionId);
+        if (!faces.length) return;
+        const f = faces[0];
+
+        const { width, height } = await getImageSize(uri);
+        assertCurrentSession(sessionId);
+
+        const normBox = {
+          x: f.frame.left / width,
+          y: f.frame.top / height,
+          width: f.frame.width / width,
+          height: f.frame.height / height,
+        };
+
+        const geo = FrameQuality.assessGeometry(
+          { frame: { width: f.frame.width }, rotationX: f.rotationX, rotationY: f.rotationY },
+          width
+        );
+        if (!geo.ok) return;
+
+        const lm = f.landmarks;
+        const eyes =
+          lm?.leftEye && lm?.rightEye
+            ? { left: lm.leftEye.position, right: lm.rightEye.position }
+            : null;
+
+        const tensor = await ImageProcessor.processFaceImage(uri, width, height, normBox, eyes);
+        assertCurrentSession(sessionId);
+
+        if (tensor.sharpness < 8.0) return; // Skip early check on blurry frames
+
+        const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
+        assertCurrentSession(sessionId);
+
+        const spoof = await FaceAntiSpoof.classify(spoofBuf);
+        assertCurrentSession(sessionId);
+
+        logger.info(`[EarlyAntiSpoof] Score: ${spoof.liveScore.toFixed(3)} (sharpness: ${tensor.sharpness.toFixed(1)})`);
+
+        // Hard early rejection if score < 0.25 on a sharp frame
+        if (spoof.liveScore < 0.25) {
+          logger.warn(`[EarlyAntiSpoof] Hard early rejection triggered (score ${spoof.liveScore.toFixed(3)})`);
+          failAuth('Presentation attack detected. Use your real face, not a photo or screen.');
+        }
+      } catch (e) {
+        if (errorToMessage(e) === STALE_SESSION_ERROR) return;
+        logger.warn('Early anti-spoof check error', e);
+      }
+    },
+    [assertCurrentSession, capturePhotoWithRetry, failAuth]
+  );
 
   // --- Real-time liveness from the frame stream ----------------------------
   const onFacesDetected = useCallback(
@@ -209,8 +294,14 @@ export function useFaceAuthVision() {
         rightEyeOpenProbability: f.rightEyeOpenProbability,
       };
       processFrame(result);
+
+      if (!earlySpoofCheckedRef.current && currentAction.current) {
+        earlySpoofCheckedRef.current = true;
+        const sessionId = flowSessionRef.current;
+        runEarlyAntiSpoofCheck(sessionId).catch((e) => logger.warn('Early anti-spoof task failed', e));
+      }
     },
-    [processFrame]
+    [processFrame, runEarlyAntiSpoofCheck]
   );
 
   const onError = useCallback((e: Error) => logger.warn('Face detector error', e), []);
@@ -239,26 +330,6 @@ export function useFaceAuthVision() {
   }, [photoOutput]);
 
   // --- One-shot recognition burst (runs when liveness passes) --------------
-  const getImageSize = (uri: string) =>
-    new Promise<{ width: number; height: number }>((resolve, reject) =>
-      Image.getSize(uri, (width, height) => resolve({ width, height }), reject)
-    );
-
-  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
-    let lastErr: unknown;
-    for (let a = 0; a < attempts; a++) {
-      try {
-        return await photoOutputRef.current.capturePhotoToFile({ enableShutterSound: false }, {});
-      } catch (e) {
-        lastErr = e;
-        await sleep(delayMs);
-      }
-    }
-    throw lastErr;
-  }, []);
-
   const captureEmbeddings = useCallback(async (sessionId: number) => {
     if (!modelsReady) {
       throw new Error('Face models are still loading');
@@ -572,6 +643,7 @@ export function useFaceAuthVision() {
       flowSessionRef.current += 1;
       flowStartTimeRef.current = Date.now();
       resolvingRef.current = false;
+      earlySpoofCheckedRef.current = false;
       livenessStatusRef.current = 'IN_PROGRESS';
       currentAction.current = action;
       setAuthStatus(action === 'ENROLL' ? 'ENROLLING' : 'VERIFYING');
@@ -593,6 +665,7 @@ export function useFaceAuthVision() {
   const reset = useCallback(() => {
     flowSessionRef.current += 1;
     resolvingRef.current = false;
+    earlySpoofCheckedRef.current = false;
     livenessStatusRef.current = 'IDLE';
     currentAction.current = null;
     setAuthStatus('IDLE');
