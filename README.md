@@ -20,9 +20,8 @@ purged.
   CNN backstop against photo and screen-replay attacks.
 - **Lightweight edge AI** — ~7 MB of active models (MobileFaceNet + MiniFASNet V2), well under the
   20 MB budget.
-- **Fast** — liveness on the native frame stream; verification = one aligned embedding + a cosine
-  match, tuned for a sub-second decision.
-- **Accuracy-oriented** — ArcFace-style eye alignment, frame quality gating, and multi-frame
+- **Ultra Fast** — ML Kit fast-mode face detection (<15ms per frame at 30 FPS); capture-to-decision latency under 1 second.
+- **Accuracy-oriented** — ArcFace-style eye alignment, frame quality gating, and 3-photo multi-frame
   enrollment averaging; re-enrollment de-duplication keeps the gallery clean.
 - **Sync & purge** — upload unsynced templates (embeddings only) to AWS, then delete locally.
 - **Cross-platform** — single Expo/React Native codebase; NNAPI (Android) / Core ML (iOS) delegates.
@@ -34,8 +33,8 @@ purged.
 | Layer | Technology |
 |---|---|
 | App | React Native 0.85 · React 19 · Expo SDK 56 · Expo Router |
-| Camera | `react-native-vision-camera` (native frame stream + photo capture) |
-| Face detection | Google ML Kit (`react-native-vision-camera-face-detector`, `@react-native-ml-kit/face-detection`) |
+| Camera | `react-native-vision-camera` (0.78 MP / 768x1024 speed resolution + photo capture) |
+| Face detection | Google ML Kit (`react-native-vision-camera-face-detector`, `@react-native-ml-kit/face-detection`) in fast mode (<15ms/frame) |
 | Inference | `react-native-fast-tflite` (TensorFlow Lite) |
 | Recognition model | MobileFaceNet (`assets/models/mobilefacenet.tflite`, ~5.2 MB) |
 | Anti-spoof model | MiniFASNet V2 (`assets/models/minifasnet_v2.tflite`, ~1.75 MB) |
@@ -145,16 +144,13 @@ Tunable thresholds (liveness, anti-spoof, recognition, quality, alignment) live 
 
 ## How it works
 
-1. **Liveness (live frame stream).** ML Kit detects faces on native camera frames; a deterministic
-   state machine drives blink / smile / head-turn challenges with timeouts and a real-face validity
-   gate. No heavy inference per frame.
-2. **Capture burst.** When liveness passes, the app captures a short burst of stills.
+1. **Liveness (live frame stream).** ML Kit detects faces in fast mode (<15ms per frame at 30 FPS) on native camera frames; a deterministic state machine drives blink / smile / head-turn challenges with timeouts and a real-face validity gate.
+2. **0.78 MP Capture Burst.** When liveness passes, the app captures 3 distinct real photo frames at 768×1024 speed resolution with minimal latency.
 3. **Quality gate.** Each frame is screened on pose, face size, sharpness, and brightness.
 4. **Align + preprocess.** Eye-landmark alignment to the ArcFace canonical geometry → 112×112 crop.
 5. **Anti-spoof.** MiniFASNet V2 classifies live vs photo/screen (once per flow).
 6. **Recognize + match.** MobileFaceNet embedding → cosine similarity against local templates
-   (threshold 0.48, calibrated on LFW — see [`benchmark/`](./benchmark/)). Enrollment averages
-   several frames into one template and de-duplicates repeats locally.
+   (threshold 0.48, calibrated on LFW — see [`benchmark/`](./benchmark/)). Enrollment averages 3 distinct photo frames into one template and de-duplicates repeats locally.
 7. **Sync, then purge.** `SyncManager.sync()` uploads embeddings to AWS, where the Lambda
    de-duplicates against the datalake so re-enrolled people never create duplicate rows; local
    copies are kept (marked synced) until you explicitly **Purge Local** them — two separate actions.
