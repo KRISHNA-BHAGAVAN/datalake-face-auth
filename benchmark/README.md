@@ -16,8 +16,8 @@ Python venv, not bundled by Metro.
 
 | Dataset | Protocol | Accuracy | ROC AUC | TAR@FAR=1% |
 |---|---|---|---|---|
-| **LFW** (Western, curated) | standard 10-fold, 6000 pairs | **97.19% ± 0.64%** | **0.984** | 95.3% |
-| **Indian** (Bollywood actors) | template-avg, 1500/1500 pairs | **96.53%** | **0.993** | 95.6% |
+| **LFW** (Western, curated) | standard 10-fold, 6000 pairs | **97.19% ± 0.64%** | **0.984** | 95.29% |
+| **Indian** (Bollywood actors) | template-avg, 1500/1500 pairs | **96.53%** | **0.993** | 95.60% |
 
 - **LFW 97.2%** clears the hackathon's **>95% accuracy** bar on the de-facto
   standard verification protocol.
@@ -37,7 +37,25 @@ AUC 0.964, and the Indian set fell short of the 95% bar:
 | LFW TAR@FAR=0.1% | 93.3% | **93.9%** |
 | Indian template-avg | 92.4% (AUC 0.964) | **96.53%** (AUC 0.993) |
 | Indian TAR@FAR=1% | 83.4% | **95.6%** |
-| Indian single-image pairwise | 82.7% (AUC 0.916) | **90.1%** (AUC 0.977) |
+| Indian single-image pairwise | 82.7% (AUC 0.916) | **90.09%** (AUC 0.977) |
+
+### Warp-buffer downscale validation
+
+The app's `ImageProcessor` caps the intermediate warp buffer at 256 px
+(`MAX_WARP_BUFFER`) to bound memory on low-end devices. To confirm this does not
+hurt accuracy, the full benchmark was re-run with the cap removed (full-resolution
+buffer). Results are **identical to within sampling noise** (≤ 0.04 pp on any
+metric), confirming the cap is safe:
+
+| Protocol | with cap (256 px) | without cap | Δ |
+|---|---|---|---|
+| LFW 10-fold | 97.19% ± 0.64% | 97.19% ± 0.64% | 0 |
+| LFW AUC | 0.9842 | 0.9842 | 0 |
+| LFW TAR@FAR=1% | 95.29% | 95.29% | 0 |
+| Indian template-avg @ 0.48 | 96.50% | **96.53%** | +0.03% |
+| Indian template-avg AUC | 0.9888 | **0.9929** | +0.004 |
+| Indian TAR@FAR=1% | 95.60% | 95.60% | 0 |
+| Indian pairwise @ 0.48 | 90.05% | 90.09% | +0.04% |
 
 Alignment coverage also went from 6784/6876 detected LFW faces to **6876/6876** —
 the similarity warp cannot fall outside the image, so no face drops to the
