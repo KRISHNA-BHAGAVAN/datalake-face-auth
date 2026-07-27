@@ -310,20 +310,14 @@ export function useFaceAuthVision() {
     };
 
     const maxAttempts = wanted + config.antiSpoof.maxChecks;
-    let cachedUri: string | null = null;
 
     for (let i = 0; i < maxAttempts && (embeddings.length < wanted || !spoofDecided()); i++) {
       let uri: string;
       try {
-        if (cachedUri) {
-          uri = cachedUri;
-        } else {
-          const photo = await capturePhotoWithRetry();
-          assertCurrentSession(sessionId);
-          uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
-          cachedUri = uri;
-          emitCapture();
-        }
+        const photo = await capturePhotoWithRetry(3, 50);
+        assertCurrentSession(sessionId);
+        uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
+        emitCapture();
       } catch (e) {
         if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
         lastIssue = `photo capture failed: ${errorToMessage(e)}`;
