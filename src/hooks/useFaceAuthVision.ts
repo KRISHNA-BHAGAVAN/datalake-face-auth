@@ -644,6 +644,7 @@ export function useFaceAuthVision() {
             currentAction.current = null;
             setConfidence(maxSim);
             setAuthStatus('SUCCESS');
+            logger.info(`[TEST_METRICS] ACTION=ENROLL STATUS=DUPLICATE DE_DUP_MATCH=${(maxSim * 100).toFixed(2)}% TOTAL_LATENCY=${totalMs}ms CAPTURE=${timings.captureMs}ms DETECT=${timings.detectionMs}ms METADATA=${timings.imageReadMs}ms EMBEDDING=${timings.embeddingMs}ms MATCH=${matchMs}ms SPOOF_SCORE=${spoofScore?.toFixed(3)}`);
             setMessage(
               `Already enrolled — matched an existing template at ${(maxSim * 100).toFixed(0)}%. No duplicate added.`
             );
@@ -659,6 +660,7 @@ export function useFaceAuthVision() {
           if (isStaleSession(sessionId)) return;
           currentAction.current = null;
           setAuthStatus('SUCCESS');
+          logger.info(`[TEST_METRICS] ACTION=ENROLL STATUS=SUCCESS POSE_VECTORS=${embeddings.length} TOTAL_TEMPLATES=${existing.length + 1} TOTAL_LATENCY=${totalMs}ms CAPTURE=${timings.captureMs}ms DETECT=${timings.detectionMs}ms METADATA=${timings.imageReadMs}ms EMBEDDING=${timings.embeddingMs}ms MATCH=${matchMs}ms SPOOF_SCORE=${spoofScore?.toFixed(3)}`);
           setMessage('Enrollment successful! Pose-diverse face templates saved offline.');
           return;
         }
@@ -705,7 +707,9 @@ export function useFaceAuthVision() {
         currentAction.current = null;
         setConfidence(maxSim);
         setLatencyMs(totalMs);
-        if (maxSim >= config.recognition.cosineSimilarityThreshold) {
+        const isVerified = maxSim >= config.recognition.cosineSimilarityThreshold;
+        logger.info(`[TEST_METRICS] ACTION=VERIFY STATUS=${isVerified ? 'SUCCESS' : 'FAILED'} MATCH_SCORE=${(maxSim * 100).toFixed(2)}% THRESHOLD=${(config.recognition.cosineSimilarityThreshold * 100).toFixed(2)}% TOTAL_TEMPLATES=${templates.length} TOTAL_LATENCY=${totalMs}ms CAPTURE=${timings.captureMs}ms DETECT=${timings.detectionMs}ms METADATA=${timings.imageReadMs}ms EMBEDDING=${timings.embeddingMs}ms MATCH=${matchMs}ms SPOOF_SCORE=${spoofScore?.toFixed(3)}`);
+        if (isVerified) {
           setAuthStatus('SUCCESS');
           setMessage('Identity verified against your enrolled template.');
         } else {
