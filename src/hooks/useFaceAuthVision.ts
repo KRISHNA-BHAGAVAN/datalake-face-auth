@@ -32,6 +32,14 @@ type AuthAction = 'ENROLL' | 'VERIFY';
 
 const STALE_SESSION_ERROR = 'STALE_FACE_AUTH_SESSION';
 
+const FACE_AUTH_PHOTO_RESOLUTION = { width: 768, height: 1024 } as const;
+const FACE_AUTH_CAPTURE_SETTINGS = {
+  enableShutterSound: false,
+  enableVirtualDeviceFusion: false,
+  enableRedEyeReduction: false,
+  enableDistortionCorrection: false,
+} as const;
+
 const challengesForAction = (action: AuthAction): LivenessChallengeType[] =>
   action === 'ENROLL' ? ['SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'] : ['BLINK'];
 
@@ -133,6 +141,26 @@ export function useFaceAuthVision() {
     setMessage(userMessage);
   }, []);
 
+  const getImageSize = (uri: string) =>
+    new Promise<{ width: number; height: number }>((resolve, reject) =>
+      Image.getSize(uri, (width, height) => resolve({ width, height }), reject)
+    );
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 100) => {
+    let lastErr: unknown;
+    for (let a = 0; a < attempts; a++) {
+      try {
+        return await photoOutputRef.current.capturePhotoToFile(FACE_AUTH_CAPTURE_SETTINGS, {});
+      } catch (e) {
+        lastErr = e;
+        await sleep(delayMs);
+      }
+    }
+    throw lastErr;
+  }, []);
+
   // --- Real-time liveness from the frame stream ----------------------------
   const onFacesDetected = useCallback(
     (faces: Face[]) => {
@@ -220,8 +248,8 @@ export function useFaceAuthVision() {
       () => ({
         onFacesDetected,
         onError,
-        performanceMode: 'accurate' as const,
-        minFaceSize: 0.2,
+        performanceMode: 'fast' as const,
+        minFaceSize: 0.15,
         runClassifications: true,
         runLandmarks: false,
         cameraFacing: facing,
@@ -231,34 +259,26 @@ export function useFaceAuthVision() {
     )
   );
 
-  const photoOutput = usePhotoOutput();
+  const photoOutput = usePhotoOutput({
+    targetResolution: FACE_AUTH_PHOTO_RESOLUTION,
+    containerFormat: 'jpeg',
+    quality: 0.8,
+    qualityPrioritization: device?.supportsSpeedQualityPrioritization ? 'speed' : 'balanced',
+  });
   const photoOutputRef = useRef(photoOutput);
 
   useEffect(() => {
     photoOutputRef.current = photoOutput;
   }, [photoOutput]);
 
+  // iOS pre-allocates photo resources here; Android treats this as a no-op.
+  useEffect(() => {
+    photoOutput.prepareSettings([FACE_AUTH_CAPTURE_SETTINGS]).catch((e) => {
+      logger.warn('Photo output preparation failed; continuing without warmup', e);
+    });
+  }, [photoOutput]);
+
   // --- One-shot recognition burst (runs when liveness passes) --------------
-  const getImageSize = (uri: string) =>
-    new Promise<{ width: number; height: number }>((resolve, reject) =>
-      Image.getSize(uri, (width, height) => resolve({ width, height }), reject)
-    );
-
-  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-  const capturePhotoWithRetry = useCallback(async (attempts = 8, delayMs = 250) => {
-    let lastErr: unknown;
-    for (let a = 0; a < attempts; a++) {
-      try {
-        return await photoOutputRef.current.capturePhotoToFile({ enableShutterSound: false }, {});
-      } catch (e) {
-        lastErr = e;
-        await sleep(delayMs);
-      }
-    }
-    throw lastErr;
-  }, []);
-
   const captureEmbeddings = useCallback(async (sessionId: number) => {
     if (!modelsReady) {
       throw new Error('Face models are still loading');
@@ -269,9 +289,6 @@ export function useFaceAuthVision() {
       currentAction.current === 'VERIFY'
         ? config.recognition.verifyEmbeddings
         : config.recognition.enrollEmbeddings;
-
-    await sleep(300);
-    assertCurrentSession(sessionId);
 
     const embeddings: number[][] = [];
     const spoofScores: number[] = [];
@@ -297,7 +314,7 @@ export function useFaceAuthVision() {
     for (let i = 0; i < maxAttempts && (embeddings.length < wanted || !spoofDecided()); i++) {
       let uri: string;
       try {
-        const photo = await capturePhotoWithRetry();
+        const photo = await capturePhotoWithRetry(3, 50);
         assertCurrentSession(sessionId);
         uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
         emitCapture();
