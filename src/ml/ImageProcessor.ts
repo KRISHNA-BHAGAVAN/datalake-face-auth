@@ -410,13 +410,21 @@ export class ImageProcessor {
     const manipResult = await imageRef.saveAsync({
       compress,
       format: SaveFormat.JPEG,
+      // The following jpeg-js decode needs bytes, not a URI. Requesting them as
+      // part of the native save avoids reopening the temporary JPEG through
+      // expo-file-system on the critical path.
+      base64: true,
     });
     context.release();
     imageRef.release();
 
-    const base64 = await FileSystem.readAsStringAsync(manipResult.uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    // Keep the file read as a compatibility fallback for platforms/builds that
+    // do not return base64 even when requested.
+    const base64 =
+      manipResult.base64 ??
+      (await FileSystem.readAsStringAsync(manipResult.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      }));
     return jpeg.decode(Buffer.from(base64, 'base64'), { useTArray: true });
   }
 

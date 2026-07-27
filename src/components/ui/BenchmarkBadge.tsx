@@ -4,10 +4,18 @@ import { colors, radius, spacing, type } from '../../theme';
 import { Icon } from './Icon';
 
 export interface BenchmarkMetrics {
+  /** Active user gesture time. Explicitly excluded from capture-to-decision SLA. */
   detectionMs?: number;
   livenessMs?: number;
+  captureMs?: number;
+  imageReadMs?: number;
+  recognitionPreprocessMs?: number;
+  antiSpoofPreprocessMs?: number;
+  antiSpoofInferenceMs?: number;
   inferenceMs?: number;
+  templateLoadMs?: number;
   matchingMs?: number;
+  /** From still capture start until accept/reject; this is the <1s SLA. */
   totalMs: number;
 }
 
@@ -33,7 +41,7 @@ export function BenchmarkBadge({ metrics, latencyMs }: BenchmarkBadgeProps) {
       >
         <Icon name="check" size="sm" color={isFast ? colors.success : colors.warning} />
         <Text style={styles.badgeText}>
-          ⚡ {displayTotal}ms Total | Target &lt;1000ms {isFast ? '✓' : ''}
+          ⚡ {displayTotal}ms Capture-to-decision | Compute target &lt;1000ms {isFast ? '✓' : ''}
         </Text>
         <Icon
           name="info"
@@ -53,16 +61,22 @@ export function BenchmarkBadge({ metrics, latencyMs }: BenchmarkBadgeProps) {
           )}
           {metrics.livenessMs != null && (
             <View style={styles.row}>
-              <Text style={styles.label}>Liveness Challenge:</Text>
-              <Text style={styles.value}>{metrics.livenessMs} ms</Text>
+              <Text style={styles.label}>Active challenge (user time):</Text>
+              <Text style={styles.value}>{metrics.livenessMs} ms — excluded</Text>
             </View>
           )}
+          {metrics.captureMs != null && <MetricRow label="Camera capture + JPEG encode:" value={metrics.captureMs} />}
+          {metrics.imageReadMs != null && <MetricRow label="Image metadata:" value={metrics.imageReadMs} />}
           {metrics.inferenceMs != null && (
             <View style={styles.row}>
               <Text style={styles.label}>TFLite Model Embedding:</Text>
               <Text style={styles.value}>{metrics.inferenceMs} ms</Text>
             </View>
           )}
+          {metrics.recognitionPreprocessMs != null && <MetricRow label="Recognition preprocessing:" value={metrics.recognitionPreprocessMs} />}
+          {metrics.antiSpoofPreprocessMs != null && <MetricRow label="Anti-spoof preprocessing:" value={metrics.antiSpoofPreprocessMs} />}
+          {metrics.antiSpoofInferenceMs != null && <MetricRow label="Anti-spoof inference:" value={metrics.antiSpoofInferenceMs} />}
+          {metrics.templateLoadMs != null && <MetricRow label="Local template load:" value={metrics.templateLoadMs} />}
           {metrics.matchingMs != null && (
             <View style={styles.row}>
               <Text style={styles.label}>Cosine Similarity Search:</Text>
@@ -70,13 +84,22 @@ export function BenchmarkBadge({ metrics, latencyMs }: BenchmarkBadgeProps) {
             </View>
           )}
           <View style={[styles.row, styles.totalRow]}>
-            <Text style={styles.totalLabel}>Total Recognition Latency:</Text>
+            <Text style={styles.totalLabel}>Capture-to-decision latency:</Text>
             <Text style={[styles.totalValue, { color: isFast ? colors.success : colors.warning }]}>
               {displayTotal} ms
             </Text>
           </View>
         </View>
       )}
+    </View>
+  );
+}
+
+function MetricRow({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={styles.row}>
+      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.value}>{value} ms</Text>
     </View>
   );
 }

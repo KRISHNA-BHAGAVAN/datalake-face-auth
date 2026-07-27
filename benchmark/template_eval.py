@@ -65,13 +65,15 @@ def main():
                     default="0.30,0.35,0.373,0.40,0.45,0.50,0.55,0.65")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--out", default="results_template")
+    ap.add_argument("--capture-profile", choices=("baseline", "optimized"), default="baseline",
+                    help="baseline source images, or app's 0.79 MP/JPEG-Q80 speed capture")
     ap.add_argument("--no-quality", dest="quality", action="store_false")
     ap.set_defaults(quality=True)
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     os.makedirs(args.out, exist_ok=True)
-    embedder = Embedder()
+    embedder = Embedder(capture_profile=args.capture_profile)
     model_meta = embedder.describe()
     print("Model:", model_meta)
     print(f"Quality gate: {'on' if args.quality else 'off'}  Enroll K={args.enroll}")

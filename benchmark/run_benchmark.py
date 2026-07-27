@@ -250,6 +250,8 @@ def main():
                     default="0.30,0.35,0.373,0.40,0.45,0.50,0.55,0.65",
                     help="comma-separated cosine thresholds for the operating-point sweep")
     ap.add_argument("--out", default="results")
+    ap.add_argument("--capture-profile", choices=("baseline", "optimized"), default="baseline",
+                    help="baseline source images, or app's 0.79 MP/JPEG-Q80 speed capture")
     ap.add_argument("--no-quality", dest="quality", action="store_false",
                     help="disable the app quality gate (keep blurry/tiny/dark faces)")
     ap.set_defaults(quality=True)
@@ -274,7 +276,7 @@ def main():
         pairs = pos + neg
 
     os.makedirs(args.out, exist_ok=True)
-    embedder = Embedder()
+    embedder = Embedder(capture_profile=args.capture_profile)
     model_meta = embedder.describe()
     print("Model:", model_meta)
     print(f"Pairs: {len(pairs)}")

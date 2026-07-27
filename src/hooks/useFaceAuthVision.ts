@@ -15,7 +15,6 @@ import { FaceAntiSpoof } from '../ml/FaceAntiSpoof';
 import { ImageProcessor } from '../ml/ImageProcessor';
 import { OfflineStore } from '../storage/OfflineStore';
 import {
-  computeCosineSimilarity,
   computeWeightedCosineSimilarity,
   getPeriocularWeights,
   averageEmbeddings,
@@ -31,6 +30,16 @@ type Facing = 'front' | 'back';
 type AuthAction = 'ENROLL' | 'VERIFY';
 
 const STALE_SESSION_ERROR = 'STALE_FACE_AUTH_SESSION';
+// The models consume 112x112 and 80x80 crops. A 1024x768 sensor-native 4:3
+// image keeps enough face detail for alignment while avoiding the library's
+// 12 MP UHD_4_3 default (3024x4032), which dominated capture/decode latency.
+const FACE_AUTH_PHOTO_RESOLUTION = { width: 768, height: 1024 } as const;
+const FACE_AUTH_CAPTURE_SETTINGS = {
+  enableShutterSound: false,
+  enableVirtualDeviceFusion: false,
+  enableRedEyeReduction: false,
+  enableDistortionCorrection: false,
+} as const;
 
 const challengesForAction = (action: AuthAction): LivenessChallengeType[] =>
   action === 'ENROLL' ? ['SMILE', 'TURN_HEAD_LEFT', 'TURN_HEAD_RIGHT'] : ['BLINK'];
@@ -83,6 +92,8 @@ export function useFaceAuthVision() {
       }
     });
   }, []);
+
+  const liveCapturedPhotosRef = useRef<Array<Awaited<ReturnType<typeof capturePhotoWithRetry>>>>([]);
 
   useEffect(() => {
     livenessStatusRef.current = livenessState.status;
@@ -231,11 +242,27 @@ export function useFaceAuthVision() {
     )
   );
 
-  const photoOutput = usePhotoOutput();
+  const photoOutput = usePhotoOutput({
+    targetResolution: FACE_AUTH_PHOTO_RESOLUTION,
+    // JPEG is intentional: ImageProcessor reads the file locally and jpeg-js
+    // decodes it. "native" could choose a format that does not have that path.
+    containerFormat: 'jpeg',
+    quality: 0.8,
+    qualityPrioritization: device?.supportsSpeedQualityPrioritization ? 'speed' : 'balanced',
+  });
   const photoOutputRef = useRef(photoOutput);
 
   useEffect(() => {
     photoOutputRef.current = photoOutput;
+  }, [photoOutput]);
+
+  // iOS pre-allocates photo resources here; Android treats this as a no-op.
+  // Either way it is safe, and prevents a first-capture allocation spike where
+  // the platform supports preparation.
+  useEffect(() => {
+    photoOutput.prepareSettings([FACE_AUTH_CAPTURE_SETTINGS]).catch((e) => {
+      logger.warn('Photo output preparation failed; continuing without warmup', e);
+    });
   }, [photoOutput]);
 
   // --- One-shot recognition burst (runs when liveness passes) --------------
@@ -250,7 +277,7 @@ export function useFaceAuthVision() {
     let lastErr: unknown;
     for (let a = 0; a < attempts; a++) {
       try {
-        return await photoOutputRef.current.capturePhotoToFile({ enableShutterSound: false }, {});
+        return await photoOutputRef.current.capturePhotoToFile(FACE_AUTH_CAPTURE_SETTINGS, {});
       } catch (e) {
         lastErr = e;
         await sleep(delayMs);
@@ -258,6 +285,20 @@ export function useFaceAuthVision() {
     }
     throw lastErr;
   }, []);
+
+  useEffect(() => {
+    if (currentAction.current === 'ENROLL' && livenessState.justPassedChallenge) {
+      const challenge = livenessState.justPassedChallenge;
+      capturePhotoWithRetry()
+        .then((photo) => {
+          logger.info(`Captured live pose photo for challenge: ${challenge}`);
+          liveCapturedPhotosRef.current.push(photo);
+        })
+        .catch((e) => {
+          logger.warn('Failed to capture live challenge photo', e);
+        });
+    }
+  }, [livenessState.justPassedChallenge, capturePhotoWithRetry]);
 
   const captureEmbeddings = useCallback(async (sessionId: number) => {
     if (!modelsReady) {
@@ -270,12 +311,20 @@ export function useFaceAuthVision() {
         ? config.recognition.verifyEmbeddings
         : config.recognition.enrollEmbeddings;
 
-    await sleep(300);
-    assertCurrentSession(sessionId);
-
     const embeddings: number[][] = [];
     const spoofScores: number[] = [];
-    let lastEmbedMs = 0;
+    // All values below are cumulative because a poor frame can cause a retry.
+    // `totalMs` is measured outside this function from the first still capture
+    // through the final local match, and deliberately excludes user gesture time.
+    const timings = {
+      captureMs: 0,
+      detectionMs: 0,
+      imageReadMs: 0,
+      recognitionPreprocessMs: 0,
+      antiSpoofPreprocessMs: 0,
+      antiSpoofInferenceMs: 0,
+      embeddingMs: 0,
+    };
     let lastIssue: string | null = null;
 
     const meanSpoofScore = () =>
@@ -296,8 +345,16 @@ export function useFaceAuthVision() {
 
     for (let i = 0; i < maxAttempts && (embeddings.length < wanted || !spoofDecided()); i++) {
       let uri: string;
+      let photo: Awaited<ReturnType<typeof capturePhotoWithRetry>>;
       try {
-        const photo = await capturePhotoWithRetry();
+        const livePhoto = liveCapturedPhotosRef.current.shift();
+        if (livePhoto) {
+          photo = livePhoto;
+        } else {
+          const t0 = Date.now();
+          photo = await capturePhotoWithRetry();
+          timings.captureMs += Date.now() - t0;
+        }
         assertCurrentSession(sessionId);
         uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
         emitCapture();
@@ -308,13 +365,43 @@ export function useFaceAuthVision() {
         continue;
       }
 
+      // Use photo dimensions directly from memory if returned by native capture or preset,
+      // falling back to Image.getSize disk I/O only if unavailable.
+      const imageSizeStart = Date.now();
+      const imageSizePromise = (async () => {
+        if ('width' in photo && 'height' in photo && typeof photo.width === 'number' && typeof photo.height === 'number' && photo.width > 0 && photo.height > 0) {
+          timings.imageReadMs += Date.now() - imageSizeStart;
+          return { width: photo.width, height: photo.height };
+        }
+        if (FACE_AUTH_PHOTO_RESOLUTION.width > 0 && FACE_AUTH_PHOTO_RESOLUTION.height > 0) {
+          timings.imageReadMs += Date.now() - imageSizeStart;
+          return { width: FACE_AUTH_PHOTO_RESOLUTION.width, height: FACE_AUTH_PHOTO_RESOLUTION.height };
+        }
+        try {
+          const size = await getImageSize(uri);
+          timings.imageReadMs += Date.now() - imageSizeStart;
+          return size;
+        } catch (e) {
+          timings.imageReadMs += Date.now() - imageSizeStart;
+          logger.warn('captured photo dimensions could not be read', e);
+          return null;
+        }
+      })();
+
       let faces: Awaited<ReturnType<typeof FaceDetection.detect>>;
       try {
+        const t0 = Date.now();
         faces = await FaceDetection.detect(uri, {
           performanceMode: 'fast',
           landmarkMode: 'all',
-          classificationMode: 'all',
+          // Active liveness already obtained smile/blink probabilities from the
+          // frame stream. The still image needs only eye landmarks for alignment.
+          classificationMode: 'none',
+          // A smaller face would fail the subsequent quality gate anyway; asking
+          // ML Kit not to search below that gate reduces still-image detection.
+          minFaceSize: config.quality.minFaceWidthRatio,
         });
+        timings.detectionMs += Date.now() - t0;
         assertCurrentSession(sessionId);
       } catch (e) {
         if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
@@ -331,7 +418,9 @@ export function useFaceAuthVision() {
       let width: number;
       let height: number;
       try {
-        ({ width, height } = await getImageSize(uri));
+        const size = await imageSizePromise;
+        if (!size) throw new Error('image dimensions unavailable');
+        ({ width, height } = size);
         assertCurrentSession(sessionId);
       } catch (e) {
         if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
@@ -346,9 +435,11 @@ export function useFaceAuthVision() {
         height: f.frame.height / height,
       };
 
+      const isEnroll = currentAction.current === 'ENROLL';
       const geo = FrameQuality.assessGeometry(
         { frame: { width: f.frame.width }, rotationX: f.rotationX, rotationY: f.rotationY },
-        width
+        width,
+        isEnroll
       );
       if (!geo.ok) {
         lastIssue = geo.reason;
@@ -362,9 +453,32 @@ export function useFaceAuthVision() {
           ? { left: lm.leftEye.position, right: lm.rightEye.position }
           : null;
 
+      // Both models need different crops from the same source JPEG. Start the
+      // inexpensive 80x80 anti-spoof crop now; awaiting it later keeps the
+      // quality gate intact while removing its serial wait from the happy path.
+      const antiSpoofPreprocessWork = !spoofDecided()
+        ? (async () => {
+            try {
+              const prepStart = Date.now();
+              const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
+              timings.antiSpoofPreprocessMs += Date.now() - prepStart;
+              assertCurrentSession(sessionId);
+              return spoofBuf;
+            } catch (e) {
+              // This task can finish after an early quality rejection or reset;
+              // return null instead of leaving an unobserved Promise rejection.
+              if (errorToMessage(e) === STALE_SESSION_ERROR) return null;
+              logger.warn('anti-spoof preprocessing failed', e);
+              return null;
+            }
+          })()
+        : null;
+
       let tensor: Awaited<ReturnType<typeof ImageProcessor.processFaceImage>>;
       try {
+        const t0 = Date.now();
         tensor = await ImageProcessor.processFaceImage(uri, width, height, normBox, eyes);
+        timings.recognitionPreprocessMs += Date.now() - t0;
         assertCurrentSession(sessionId);
       } catch (e) {
         if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
@@ -380,26 +494,27 @@ export function useFaceAuthVision() {
         continue;
       }
 
-      if (!spoofDecided() && tensor.sharpness >= 8.0) {
-        try {
-          const spoofBuf = await ImageProcessor.processAntiSpoofImage(uri, width, height, normBox);
-          assertCurrentSession(sessionId);
-          const spoof = await FaceAntiSpoof.classify(spoofBuf);
-          assertCurrentSession(sessionId);
-          spoofScores.push(spoof.liveScore);
-        } catch (e) {
-          if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
-          lastIssue = `anti-spoof check failed: ${errorToMessage(e)}`;
-          logger.warn('anti-spoof failed', e);
-        }
-      }
+      // The passive model uses a separate 80x80 crop. Start that work before
+      // embedding so its native preprocessing/inference overlaps with the 112x112
+      // recognizer instead of extending the critical path serially.
+      const antiSpoofWork = antiSpoofPreprocessWork && tensor.sharpness >= 8.0
+          ? (async () => {
+            const spoofBuf = await antiSpoofPreprocessWork;
+            if (!spoofBuf) throw new Error('anti-spoof preprocessing failed');
+            const inferStart = Date.now();
+            const spoof = await FaceAntiSpoof.classify(spoofBuf);
+            timings.antiSpoofInferenceMs += Date.now() - inferStart;
+            assertCurrentSession(sessionId);
+            return spoof.liveScore;
+          })()
+        : null;
 
       if (embeddings.length < wanted) {
         try {
           const t0 = Date.now();
           const emb = await FaceRecognizer.getEmbedding(tensor.input);
           assertCurrentSession(sessionId);
-          lastEmbedMs = Date.now() - t0;
+          timings.embeddingMs += Date.now() - t0;
           embeddings.push(emb);
           if (embeddings.length < wanted) {
             setMessage(`Captured frame ${embeddings.length} of ${wanted}`);
@@ -410,6 +525,16 @@ export function useFaceAuthVision() {
           if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
           lastIssue = `embedding failed: ${errorToMessage(e)}`;
           logger.warn('embedding failed', e);
+        }
+      }
+
+      if (antiSpoofWork) {
+        try {
+          spoofScores.push(await antiSpoofWork);
+        } catch (e) {
+          if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
+          lastIssue = `anti-spoof check failed: ${errorToMessage(e)}`;
+          logger.warn('anti-spoof failed', e);
         }
       }
     }
@@ -424,7 +549,14 @@ export function useFaceAuthVision() {
       maxSpoof < 0.35 &&
       meanSpoof < 0.35;
     const spoofScore = maxSpoof ?? meanSpoof;
-    return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue };
+    return {
+      embeddings,
+      spoofed,
+      spoofScore,
+      passiveCheckCompleted: spoofScores.length > 0,
+      timings,
+      lastIssue,
+    };
   }, [assertCurrentSession, capturePhotoWithRetry, emitCapture, modelsReady]);
 
   // Resolve the flow once liveness reaches a terminal state.
@@ -441,14 +573,19 @@ export function useFaceAuthVision() {
     resolvingRef.current = true;
     const sessionId = flowSessionRef.current;
     livenessDurationRef.current = Math.max(1, Date.now() - flowStartTimeRef.current);
+    const captureToDecisionStart = Date.now();
 
     const run = async () => {
       setIsProcessing(true);
       try {
-        const { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue } =
+        const { embeddings, spoofed, spoofScore, passiveCheckCompleted, timings, lastIssue } =
           await captureEmbeddings(sessionId);
         if (isStaleSession(sessionId)) return;
 
+        if (!passiveCheckCompleted) {
+          failAuth('Passive anti-spoof check could not complete. Please try again in better lighting.');
+          return;
+        }
         if (spoofed) {
           logger.log(`[AntiSpoof] rejected, mean live score ${spoofScore?.toFixed(3)}`);
           failAuth('Presentation attack detected. Use your real face, not a photo or screen.');
@@ -468,21 +605,36 @@ export function useFaceAuthVision() {
         if (!action || isStaleSession(sessionId)) return;
 
         if (action === 'ENROLL') {
-          const matchStart = Date.now();
+          const templateLoadStart = Date.now();
           const existing = await OfflineStore.getTemplates();
+          const templateLoadMs = Date.now() - templateLoadStart;
           if (isStaleSession(sessionId)) return;
+          const matchStart = Date.now();
           let maxSim = -1;
           const weights = getPeriocularWeights(avg.length);
           for (const t of existing) {
-            const sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
+            let sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
+            if (t.embeddings && Array.isArray(t.embeddings)) {
+              for (const vec of t.embeddings) {
+                const s = computeWeightedCosineSimilarity(avg, vec, weights);
+                if (s > sim) sim = s;
+              }
+            }
             if (sim > maxSim) maxSim = sim;
           }
           const matchMs = Date.now() - matchStart;
-          const totalMs = Date.now() - flowStartTimeRef.current;
+          const totalMs = Date.now() - captureToDecisionStart;
 
           setBenchmarkMetrics({
+            captureMs: timings.captureMs,
+            detectionMs: timings.detectionMs,
+            imageReadMs: timings.imageReadMs,
+            recognitionPreprocessMs: timings.recognitionPreprocessMs,
+            antiSpoofPreprocessMs: timings.antiSpoofPreprocessMs,
+            antiSpoofInferenceMs: timings.antiSpoofInferenceMs,
+            templateLoadMs,
             livenessMs: livenessDurationRef.current,
-            inferenceMs: lastEmbedMs,
+            inferenceMs: timings.embeddingMs,
             matchingMs: matchMs,
             totalMs,
           });
@@ -500,18 +652,21 @@ export function useFaceAuthVision() {
           await OfflineStore.saveTemplate({
             id: `user-${Date.now()}`,
             embedding: avg,
+            embeddings: embeddings.length > 0 ? embeddings : [avg],
             createdAt: Date.now(),
             isSynced: false,
           });
           if (isStaleSession(sessionId)) return;
           currentAction.current = null;
           setAuthStatus('SUCCESS');
-          setMessage('Enrollment successful! Face template saved offline.');
+          setMessage('Enrollment successful! Pose-diverse face templates saved offline.');
           return;
         }
 
         // VERIFY
+        const templateLoadStart = Date.now();
         const templates = await OfflineStore.getTemplates();
+        const templateLoadMs = Date.now() - templateLoadStart;
         if (isStaleSession(sessionId)) return;
         if (templates.length === 0) {
           failAuth('Verification failed: no enrolled templates.');
@@ -521,15 +676,28 @@ export function useFaceAuthVision() {
         let maxSim = -1;
         const weights = getPeriocularWeights(avg.length);
         for (const t of templates) {
-          const sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
+          let sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
+          if (t.embeddings && Array.isArray(t.embeddings)) {
+            for (const vec of t.embeddings) {
+              const s = computeWeightedCosineSimilarity(avg, vec, weights);
+              if (s > sim) sim = s;
+            }
+          }
           if (sim > maxSim) maxSim = sim;
         }
         const matchMs = Date.now() - matchStart;
-        const totalMs = Date.now() - flowStartTimeRef.current;
+        const totalMs = Date.now() - captureToDecisionStart;
 
         setBenchmarkMetrics({
+          captureMs: timings.captureMs,
+          detectionMs: timings.detectionMs,
+          imageReadMs: timings.imageReadMs,
+          recognitionPreprocessMs: timings.recognitionPreprocessMs,
+          antiSpoofPreprocessMs: timings.antiSpoofPreprocessMs,
+          antiSpoofInferenceMs: timings.antiSpoofInferenceMs,
+          templateLoadMs,
           livenessMs: livenessDurationRef.current,
-          inferenceMs: lastEmbedMs,
+          inferenceMs: timings.embeddingMs,
           matchingMs: matchMs,
           totalMs,
         });
@@ -572,6 +740,7 @@ export function useFaceAuthVision() {
       flowSessionRef.current += 1;
       flowStartTimeRef.current = Date.now();
       resolvingRef.current = false;
+      liveCapturedPhotosRef.current = [];
       livenessStatusRef.current = 'IN_PROGRESS';
       currentAction.current = action;
       setAuthStatus(action === 'ENROLL' ? 'ENROLLING' : 'VERIFYING');

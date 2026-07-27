@@ -19,15 +19,13 @@ export const config = {
     cropScale: 2.7,
     inputSize: 80,
     checkEveryNFrames: 3, // throttle: run anti-spoof every Nth frame to keep the loop fast
-    // Sequential testing. One softmax sample is a coin-flip near the boundary, but
-    // sampling more frames costs capture time, so we only pay it when the answer is
-    // genuinely uncertain: stop early once the running mean is decisively live or
-    // decisively spoof, otherwise gather up to maxChecks frames and average.
-    // Averaging scores beats majority voting here — it keeps the distance from the
-    // boundary instead of throwing it away.
+    // Verification has already completed an active blink challenge on the native
+    // frame stream. One passive check on the accepted still is therefore enough for
+    // the capture-to-decision path. This avoids taking extra JPEGs solely to average
+    // the passive model, which was the dominant avoidable latency.
     confidentLiveScore: 0.7,
     confidentSpoofScore: 0.2,
-    maxChecks: 3,
+    maxChecks: 1,
   },
   // Recognition constraints
   recognition: {
@@ -44,7 +42,7 @@ export const config = {
     // Keeping 0.45 would score marginally higher still (LFW 96.8%) but doubles the
     // impostor-accept rate on the Indian set (0.42% -> 0.85%). For attendance,
     // holding FAR flat is worth the ~1pp.
-    cosineSimilarityThreshold: 0.48,
+    cosineSimilarityThreshold: 0.52,
     enrollEmbeddings: 3, // averaged into the stored template (accuracy vs enroll speed)
     verifyEmbeddings: 1, // single good probe frame — fast verify; burst retries if it's bad
   },

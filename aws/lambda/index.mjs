@@ -51,13 +51,13 @@ async function loadExisting() {
     const out = await ddb.send(
       new ScanCommand({
         TableName: TABLE,
-        ProjectionExpression: 'id, embedding',
+        ProjectionExpression: 'id, embedding, createdAt',
         ExclusiveStartKey,
       })
     );
     for (const it of out.Items || []) {
       if (Array.isArray(it.embedding)) {
-        rows.push({ id: it.id, embedding: it.embedding.map(Number) });
+        rows.push({ id: it.id, embedding: it.embedding.map(Number), createdAt: it.createdAt });
       }
     }
     ExclusiveStartKey = out.LastEvaluatedKey;
@@ -91,6 +91,12 @@ export const handler = async (event) => {
     payload = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
   } catch {
     return reply(400, { error: 'Invalid JSON body' });
+  }
+
+  // Download action — return all templates from DynamoDB.
+  if (payload?.action === 'download') {
+    const all = await loadExisting();
+    return reply(200, { templates: all.map((r) => ({ id: r.id, embedding: r.embedding, createdAt: r.createdAt })) });
   }
 
   const incoming = Array.isArray(payload?.templates) ? payload.templates : [];

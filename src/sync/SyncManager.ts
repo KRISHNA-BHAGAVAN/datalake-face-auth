@@ -87,11 +87,12 @@ export class SyncManager {
 
     try {
       const response = await fetch(SYNC_API_URL, {
-        method: 'GET',
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(SYNC_API_KEY ? { 'x-api-key': SYNC_API_KEY } : {}),
         },
+        body: JSON.stringify({ action: 'download' }),
       });
 
       if (!response.ok) {

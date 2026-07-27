@@ -15,14 +15,15 @@ interface FaceGeometry {
 }
 
 export const FrameQuality = {
-  assessGeometry(face: FaceGeometry, imageWidth: number): QualityVerdict {
+  assessGeometry(face: FaceGeometry, imageWidth: number, isEnrollment = false): QualityVerdict {
     const q = config.quality;
 
     const widthRatio = face.frame.width / imageWidth;
     if (widthRatio < q.minFaceWidthRatio) {
       return { ok: false, reason: 'Move closer' };
     }
-    if (Math.abs(face.rotationY) > q.maxYawDeg) {
+    const maxYaw = isEnrollment ? 45 : q.maxYawDeg;
+    if (Math.abs(face.rotationY) > maxYaw) {
       return { ok: false, reason: 'Face the camera' };
     }
     if (Math.abs(face.rotationX) > q.maxPitchDeg) {

@@ -177,6 +177,27 @@ comparison is the valid signal, since both crops see identical input.
 Outputs land in `--out` (default `results/`): `report.md`, `results.json`,
 `sweep.md`, `roc.png`, `scores.png`.
 
+### Capture-profile regression test
+
+App speed mode now captures a 768×1024 JPEG at quality 0.8, rather than full
+UHD. Compare source-image baseline against simulated speed capture before
+claiming no accuracy regression:
+
+```bash
+benchmark/.venv/bin/python benchmark/run_benchmark.py \
+  --folders "benchmark/data/indian-actor-images-dataset/Bollywood Actor Images" \
+  --num-same 1500 --num-diff 1500 --capture-profile baseline \
+  --out benchmark/results/indian_pairwise_baseline
+
+benchmark/.venv/bin/python benchmark/run_benchmark.py \
+  --folders "benchmark/data/indian-actor-images-dataset/Bollywood Actor Images" \
+  --num-same 1500 --num-diff 1500 --capture-profile optimized \
+  --out benchmark/results/indian_pairwise_optimized
+```
+
+`optimized` is controlled downscale + JPEG-Q80 simulation, not a replacement
+for final capture tests on an actual phone.
+
 ## Setup
 
 ```bash

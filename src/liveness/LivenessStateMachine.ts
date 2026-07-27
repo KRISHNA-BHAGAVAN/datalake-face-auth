@@ -65,6 +65,7 @@ export class LivenessStateMachine {
     const passed = this.checkChallenge(this.state.currentChallenge, result);
 
     if (passed) {
+      const completedChallenge = this.state.currentChallenge;
       if (this.state.challengesRemaining.length > 0) {
         // Move to next challenge
         const nextChallenge = this.state.challengesRemaining[0];
@@ -79,6 +80,9 @@ export class LivenessStateMachine {
         this.state.currentChallenge = null;
         this.state.message = 'Liveness verified!';
       }
+      this.state.justPassedChallenge = completedChallenge;
+    } else {
+      delete this.state.justPassedChallenge;
     }
 
     return this.state;

@@ -22,6 +22,37 @@ from detect import detect
 from preprocess import build_input
 
 
+def simulate_camera_capture(rgb, profile):
+    """Approximate app camera output before still-image ML Kit processing.
+
+    ``optimized`` mirrors FaceAuth's speed capture: a 768x1024 (0.79 MP)
+    target and JPEG quality 0.8. It only downscales; source images with fewer
+    pixels are never upscaled. This is a conservative image-quality regression
+    check, not a substitute for a real-device camera benchmark.
+    """
+    if profile == "baseline":
+        return rgb
+    if profile != "optimized":
+        raise ValueError(f"unknown capture profile: {profile}")
+
+    h, w = rgb.shape[:2]
+    max_pixels = 768 * 1024
+    if h * w > max_pixels:
+        scale = (max_pixels / (h * w)) ** 0.5
+        rgb = cv2.resize(
+            rgb,
+            (max(1, round(w * scale)), max(1, round(h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    ok, encoded = cv2.imencode(
+        ".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+        [int(cv2.IMWRITE_JPEG_QUALITY), 80],
+    )
+    if not ok:
+        raise RuntimeError("optimized capture JPEG encoding failed")
+    return cv2.cvtColor(cv2.imdecode(encoded, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+
 def _quality_ok(rgb, det):
     """Mirror config.quality: reject low-confidence, tiny, dark/blown, or blurry
     faces — the frames the device's quality gate would skip. Returns (ok, reason)."""
@@ -47,7 +78,7 @@ def _quality_ok(rgb, det):
 
 
 class Embedder:
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, capture_profile="baseline"):
         path = model_path or os.path.join(os.path.dirname(__file__), C.MODEL_PATH)
         self.interpreter = _Interpreter(model_path=os.path.abspath(path))
         self.interpreter.allocate_tensors()
@@ -55,6 +86,7 @@ class Embedder:
         self.out = self.interpreter.get_output_details()[0]
         # Detect layout: NHWC [1,112,112,3] (expected) vs NCHW [1,3,112,112].
         self.channels_first = self.inp["shape"][1] == 3 and self.inp["shape"][-1] != 3
+        self.capture_profile = capture_profile
 
     def describe(self):
         return {
@@ -63,6 +95,7 @@ class Embedder:
             "output_shape": [int(x) for x in self.out["shape"]],
             "embedding_dim": int(self.out["shape"][-1]),
             "layout": "NCHW" if self.channels_first else "NHWC",
+            "capture_profile": self.capture_profile,
         }
 
     def embed_tensor(self, tensor_hwc):
@@ -85,6 +118,7 @@ class Embedder:
         if bgr is None:
             return None, False
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        rgb = simulate_camera_capture(rgb, self.capture_profile)
         det = detect(rgb)
         if det is None:
             return None, False

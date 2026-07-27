@@ -238,7 +238,13 @@ export function useFaceAuth() {
           const existing = await OfflineStore.getTemplates();
           let maxSim = -1;
           for (const t of existing) {
-            const sim = computeCosineSimilarity(avgEmbedding, t.embedding);
+            let sim = computeCosineSimilarity(avgEmbedding, t.embedding);
+            if (t.embeddings && Array.isArray(t.embeddings)) {
+              for (const vec of t.embeddings) {
+                const s = computeCosineSimilarity(avgEmbedding, vec);
+                if (s > sim) sim = s;
+              }
+            }
             if (sim > maxSim) maxSim = sim;
           }
 
@@ -255,6 +261,7 @@ export function useFaceAuth() {
           await OfflineStore.saveTemplate({
             id: `user-${Date.now()}`,
             embedding: avgEmbedding,
+            embeddings: embeddings.length > 0 ? embeddings : [avgEmbedding],
             createdAt: Date.now(),
             isSynced: false,
           });
@@ -281,7 +288,13 @@ export function useFaceAuth() {
           let matchedTemplate = null;
 
           for (const t of templates) {
-            const sim = computeCosineSimilarity(avgEmbedding, t.embedding);
+            let sim = computeCosineSimilarity(avgEmbedding, t.embedding);
+            if (t.embeddings && Array.isArray(t.embeddings)) {
+              for (const vec of t.embeddings) {
+                const s = computeCosineSimilarity(avgEmbedding, vec);
+                if (s > sim) sim = s;
+              }
+            }
             if (sim > maxSimilarity) {
               maxSimilarity = sim;
               matchedTemplate = t;

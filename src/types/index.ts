@@ -4,6 +4,7 @@ export type LivenessState = {
   status: 'IDLE' | 'IN_PROGRESS' | 'PASSED' | 'FAILED';
   currentChallenge: LivenessChallengeType | null;
   challengesRemaining: LivenessChallengeType[];
+  justPassedChallenge?: LivenessChallengeType;
   timeoutAt: number | null;
   message: string;
 };
@@ -22,7 +23,8 @@ export type FaceLandmarkResult = {
 
 export type FaceTemplate = {
   id: string; // E.g., user id
-  embedding: number[]; // Flattened float32 array
+  embedding: number[]; // Primary flattened float32 array
+  embeddings?: number[][]; // Multi-pose template vectors (e.g., [frontal, left, right])
   createdAt: number;
   isSynced: boolean;
 };
