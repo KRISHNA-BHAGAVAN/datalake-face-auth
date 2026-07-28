@@ -22,7 +22,7 @@ import {
 } from '../recognition/CosineSimilarity';
 import { FrameQuality } from '../recognition/FrameQuality';
 import { config } from '../utils/config';
-import { FaceLandmarkResult, LivenessChallengeType } from '../types';
+import { FaceLandmarkResult, FaceTemplate, LivenessChallengeType } from '../types';
 import { logger } from '../utils/logger';
 import { BenchmarkMetrics } from '../components/ui/BenchmarkBadge';
 
@@ -65,6 +65,9 @@ export function useFaceAuthVision() {
   const [facing, setFacing] = useState<Facing>('front');
   const [modelsReady, setModelsReady] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [matchedImageUri, setMatchedImageUri] = useState<string | null>(null);
+  const [probeImageUri, setProbeImageUri] = useState<string | null>(null);
+  const [capturedFrameUris, setCapturedFrameUris] = useState<string[]>([]);
 
   const device = useCameraDevice(facing);
 
@@ -310,18 +313,25 @@ export function useFaceAuthVision() {
     };
 
     const maxAttempts = wanted + config.antiSpoof.maxChecks;
+    let lastCapturedPhotoUri: string | null = null;
 
-    for (let i = 0; i < maxAttempts && (embeddings.length < wanted || !spoofDecided()); i++) {
+    const capturedFrameUris: string[] = [];
+
+    for (let attempts = 0; attempts < maxAttempts; attempts++) {
+      assertCurrentSession(sessionId);
+      if (embeddings.length >= wanted && spoofDecided()) break;
+
       let uri: string;
       try {
         const photo = await capturePhotoWithRetry(3, 50);
         assertCurrentSession(sessionId);
         uri = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
         emitCapture();
+        lastCapturedPhotoUri = uri;
       } catch (e) {
         if (errorToMessage(e) === STALE_SESSION_ERROR) throw e;
         lastIssue = `photo capture failed: ${errorToMessage(e)}`;
-        logger.warn('capturePhotoToFile failed', e);
+        logger.warn('photo capture failed', e);
         continue;
       }
 
@@ -418,6 +428,7 @@ export function useFaceAuthVision() {
           assertCurrentSession(sessionId);
           lastEmbedMs = Date.now() - t0;
           embeddings.push(emb);
+          capturedFrameUris.push(uri);
           if (embeddings.length < wanted) {
             setMessage(`Captured frame ${embeddings.length} of ${wanted}`);
           } else {
@@ -433,15 +444,13 @@ export function useFaceAuthVision() {
 
     const maxSpoof = spoofScores.length > 0 ? Math.max(...spoofScores) : null;
     const meanSpoof = spoofScores.length > 0 ? meanSpoofScore() : null;
-    // Real face is live if max frame score >= 0.35 or mean score >= 0.35.
-    // 2D print/screen attack scores < 0.25 consistently across all frames.
     const spoofed =
       maxSpoof != null &&
       meanSpoof != null &&
       maxSpoof < 0.35 &&
       meanSpoof < 0.35;
     const spoofScore = maxSpoof ?? meanSpoof;
-    return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue };
+    return { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue, lastCapturedPhotoUri, capturedFrameUris };
   }, [assertCurrentSession, capturePhotoWithRetry, emitCapture, modelsReady]);
 
   // Resolve the flow once liveness reaches a terminal state.
@@ -462,9 +471,16 @@ export function useFaceAuthVision() {
     const run = async () => {
       setIsProcessing(true);
       try {
-        const { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue } =
+        const { embeddings, spoofed, spoofScore, lastEmbedMs, lastIssue, lastCapturedPhotoUri, capturedFrameUris: burstUris } =
           await captureEmbeddings(sessionId);
         if (isStaleSession(sessionId)) return;
+
+        if (lastCapturedPhotoUri) {
+          setProbeImageUri(lastCapturedPhotoUri);
+        }
+        if (burstUris && burstUris.length > 0) {
+          setCapturedFrameUris(burstUris);
+        }
 
         if (spoofed) {
           logger.log(`[AntiSpoof] rejected, mean live score ${spoofScore?.toFixed(3)}`);
@@ -489,10 +505,14 @@ export function useFaceAuthVision() {
           const existing = await OfflineStore.getTemplates();
           if (isStaleSession(sessionId)) return;
           let maxSim = -1;
+          let existingMatchTemplate: FaceTemplate | null = null;
           const weights = getPeriocularWeights(avg.length);
           for (const t of existing) {
             const sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
-            if (sim > maxSim) maxSim = sim;
+            if (sim > maxSim) {
+              maxSim = sim;
+              existingMatchTemplate = t;
+            }
           }
           const matchMs = Date.now() - matchStart;
           const totalMs = Date.now() - flowStartTimeRef.current;
@@ -508,18 +528,31 @@ export function useFaceAuthVision() {
           if (maxSim >= config.enroll.duplicateThreshold) {
             currentAction.current = null;
             setConfidence(maxSim);
+            if (existingMatchTemplate) {
+              const uri = await OfflineStore.getImageUri(existingMatchTemplate.id);
+              if (uri) setMatchedImageUri(uri);
+            }
             setAuthStatus('SUCCESS');
             setMessage(
               `Already enrolled — matched an existing template at ${(maxSim * 100).toFixed(0)}%. No duplicate added.`
             );
             return;
           }
+          const newId = `user-${Date.now()}`;
           await OfflineStore.saveTemplate({
-            id: `user-${Date.now()}`,
+            id: newId,
             embedding: avg,
             createdAt: Date.now(),
             isSynced: false,
           });
+
+          // Save face crop image to SSD for future offline match comparison
+          if (lastCapturedPhotoUri) {
+            await OfflineStore.saveTemplateImage(newId, lastCapturedPhotoUri).catch((e) =>
+              logger.warn('Image save error during enrollment', e)
+            );
+          }
+
           if (isStaleSession(sessionId)) return;
           currentAction.current = null;
           setAuthStatus('SUCCESS');
@@ -536,10 +569,14 @@ export function useFaceAuthVision() {
         }
         const matchStart = Date.now();
         let maxSim = -1;
+        let matchedTemplate: FaceTemplate | null = null;
         const weights = getPeriocularWeights(avg.length);
         for (const t of templates) {
           const sim = computeWeightedCosineSimilarity(avg, t.embedding, weights);
-          if (sim > maxSim) maxSim = sim;
+          if (sim > maxSim) {
+            maxSim = sim;
+            matchedTemplate = t;
+          }
         }
         const matchMs = Date.now() - matchStart;
         const totalMs = Date.now() - flowStartTimeRef.current;
@@ -554,6 +591,11 @@ export function useFaceAuthVision() {
         currentAction.current = null;
         setConfidence(maxSim);
         setLatencyMs(totalMs);
+        if (matchedTemplate) {
+          const uri = await OfflineStore.getImageUri(matchedTemplate.id);
+          if (uri) setMatchedImageUri(uri);
+        }
+
         if (maxSim >= config.recognition.cosineSimilarityThreshold) {
           setAuthStatus('SUCCESS');
           setMessage('Identity verified against your enrolled template.');
@@ -595,6 +637,9 @@ export function useFaceAuthVision() {
       setConfidence(null);
       setLatencyMs(null);
       setBenchmarkMetrics(null);
+      setMatchedImageUri(null);
+      setProbeImageUri(null);
+      setCapturedFrameUris([]);
       setIsProcessing(false);
       setMessage('Follow the prompts. Anti-spoof and liveness checks are active.');
       resetLiveness();
@@ -617,6 +662,9 @@ export function useFaceAuthVision() {
     setConfidence(null);
     setLatencyMs(null);
     setBenchmarkMetrics(null);
+    setMatchedImageUri(null);
+    setProbeImageUri(null);
+    setCapturedFrameUris([]);
     setIsProcessing(false);
     resetLiveness();
   }, [resetLiveness]);
@@ -630,6 +678,9 @@ export function useFaceAuthVision() {
     setConfidence(null);
     setLatencyMs(null);
     setBenchmarkMetrics(null);
+    setMatchedImageUri(null);
+    setProbeImageUri(null);
+    setCapturedFrameUris([]);
     resetLiveness();
 
     setFacing((p) => (p === 'front' ? 'back' : 'front'));
@@ -653,6 +704,9 @@ export function useFaceAuthVision() {
     confidence,
     latencyMs,
     benchmarkMetrics,
+    matchedImageUri,
+    probeImageUri,
+    capturedFrameUris,
     modelsReady,
     modelError,
     // camera

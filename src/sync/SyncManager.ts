@@ -1,17 +1,35 @@
+import { File } from 'expo-file-system';
 import { OfflineStore } from '../storage/OfflineStore';
 import { FaceTemplate, SyncResult } from '../types';
 import { logger } from '../utils/logger';
 
 const SYNC_API_URL = process.env.EXPO_PUBLIC_FACE_SYNC_API_URL;
 const SYNC_API_KEY = process.env.EXPO_PUBLIC_FACE_SYNC_API_KEY;
+const S3_BUCKET_NAME = process.env.EXPO_PUBLIC_S3_BUCKET_NAME;
+const S3_REGION = process.env.EXPO_PUBLIC_S3_REGION || 'us-east-1';
 
 export class SyncManager {
   /**
-   * Uploads unsynced face templates to AWS. The Lambda de-duplicates against
-   * the datalake (cosine match) so re-enrolled people don't create duplicate
-   * rows. Locally we MARK templates synced rather than deleting them — that
-   * keeps enrollment dedup and offline verify working. Use purgeLocal() to
-   * remove the on-device copies as a separate, explicit step.
+   * Helper to convert a local SSD image file to Base64 string for AWS S3 sync payload.
+   */
+  private static async getLocalImageBase64(templateId: string): Promise<string | null> {
+    try {
+      const uri = await OfflineStore.getImageUri(templateId);
+      if (!uri) return null;
+
+      const file = new File(uri);
+      if (!file.exists) return null;
+
+      const base64 = await file.base64();
+      return base64 || null;
+    } catch (e) {
+      logger.warn(`Failed to read local image Base64 for template ${templateId}`, e);
+      return null;
+    }
+  }
+
+  /**
+   * Uploads unsynced face templates and enrolled face images to AWS (Lambda + S3).
    */
   static async sync(): Promise<SyncResult> {
     const templates = await OfflineStore.getTemplates();
@@ -29,19 +47,28 @@ export class SyncManager {
     }
 
     try {
+      // Build payload including template embedding vectors and face image Base64 data for S3
+      const templatesPayload = await Promise.all(
+        unsynced.map(async (t) => {
+          const imageBase64 = await this.getLocalImageBase64(t.id);
+          return {
+            id: t.id,
+            embedding: t.embedding,
+            createdAt: t.createdAt,
+            imageBase64: imageBase64 || undefined,
+            s3Bucket: S3_BUCKET_NAME || undefined,
+            s3Region: S3_REGION,
+          };
+        })
+      );
+
       const response = await fetch(SYNC_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(SYNC_API_KEY ? { 'x-api-key': SYNC_API_KEY } : {}),
         },
-        body: JSON.stringify({
-          templates: unsynced.map((t) => ({
-            id: t.id,
-            embedding: t.embedding,
-            createdAt: t.createdAt,
-          })),
-        }),
+        body: JSON.stringify({ templates: templatesPayload }),
       });
 
       if (!response.ok) {
@@ -50,11 +77,9 @@ export class SyncManager {
       }
 
       const result = await response.json().catch(() => ({}));
-      const duplicates = Array.isArray(result?.duplicates)
-        ? result.duplicates.length
-        : 0;
+      const duplicates = Array.isArray(result?.duplicates) ? result.duplicates.length : 0;
 
-      // Everything we sent now lives in the datalake, mark all synced locally.
+      // Mark all uploaded templates as synced locally
       for (const template of unsynced) {
         await OfflineStore.markSynced(template.id);
       }
@@ -73,8 +98,7 @@ export class SyncManager {
   }
 
   /**
-   * Downloads enrolled face templates from AWS cloud datalake and merges them locally.
-   * Useful for pre-warming cache on field devices or post-purge offline preparation.
+   * Downloads enrolled face templates and face images from AWS cloud datalake and merges them locally.
    */
   static async downloadCloudTemplates(): Promise<{ downloaded: number; added: number; error?: string }> {
     if (!SYNC_API_URL) {
@@ -100,14 +124,33 @@ export class SyncManager {
       }
 
       const result = await response.json().catch(() => ({}));
-      const templates: FaceTemplate[] = Array.isArray(result?.templates)
-        ? result.templates.map((item: any) => ({
-            id: String(item.id || `cloud-${Date.now()}`),
-            embedding: Array.isArray(item.embedding) ? item.embedding : [],
-            createdAt: Number(item.createdAt || Date.now()),
-            isSynced: true,
-          }))
-        : [];
+      const rawTemplates = Array.isArray(result?.templates) ? result.templates : [];
+
+      const templates: FaceTemplate[] = [];
+
+      for (const item of rawTemplates) {
+        const id = String(item.id || `cloud-${Date.now()}`);
+        const embedding = Array.isArray(item.embedding) ? item.embedding : [];
+
+        // Save downloaded face image to local SSD if available in payload
+        if (item.imageBase64) {
+          const tempUri = `data:image/jpeg;base64,${item.imageBase64}`;
+          await OfflineStore.saveTemplateImage(id, tempUri).catch((e) =>
+            logger.warn(`Failed to save cloud image for ${id}`, e)
+          );
+        } else if (item.imageUrl) {
+          await OfflineStore.saveTemplateImage(id, item.imageUrl).catch((e) =>
+            logger.warn(`Failed to download cloud image for ${id}`, e)
+          );
+        }
+
+        templates.push({
+          id,
+          embedding,
+          createdAt: Number(item.createdAt || Date.now()),
+          isSynced: true,
+        });
+      }
 
       const added = await OfflineStore.mergeCloudTemplates(templates);
 
@@ -126,8 +169,7 @@ export class SyncManager {
   }
 
   /**
-   * Deletes on-device copies of templates already synced to AWS. Unsynced
-   * templates are left untouched. Returns the number purged.
+   * Deletes on-device copies of templates already synced to AWS.
    */
   static async purgeLocal(): Promise<number> {
     return OfflineStore.purgeSynced();

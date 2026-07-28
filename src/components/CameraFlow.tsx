@@ -32,6 +32,9 @@ export function CameraFlow({ mode }: Props) {
     confidence,
     latencyMs,
     benchmarkMetrics,
+    matchedImageUri,
+    probeImageUri,
+    capturedFrameUris,
     modelsReady,
     modelError,
     device,
@@ -75,8 +78,15 @@ export function CameraFlow({ mode }: Props) {
   const scanning = !done && resolved === null;
   const cameraReady = hasPermission && device && modelsReady && !modelError;
 
+  const isDuplicateEnroll = message.includes('Already enrolled');
   const resultTitle =
-    authStatus === 'SUCCESS' ? (mode === 'ENROLL' ? 'Enrolled' : 'Verified') : 'Not verified';
+    authStatus === 'SUCCESS'
+      ? isDuplicateEnroll
+        ? 'Already Enrolled'
+        : mode === 'ENROLL'
+        ? 'Enrolled'
+        : 'Verified'
+      : 'Not verified';
 
   return (
     <View style={styles.container}>
@@ -94,6 +104,7 @@ export function CameraFlow({ mode }: Props) {
           resolved={resolved}
           scanning={scanning}
           subscribeCapture={subscribeCapture}
+          currentChallenge={livenessState.currentChallenge}
         />
       )}
 
@@ -170,9 +181,12 @@ export function CameraFlow({ mode }: Props) {
           status={authStatus as 'SUCCESS' | 'FAILED'}
           title={resultTitle}
           message={message}
-          confidence={mode === 'VERIFY' ? confidence : null}
+          confidence={confidence}
           latencyMs={latencyMs}
           benchmarkMetrics={benchmarkMetrics}
+          matchedImageUri={matchedImageUri}
+          probeImageUri={probeImageUri}
+          capturedFrameUris={capturedFrameUris}
           threshold={config.recognition.cosineSimilarityThreshold}
           onRetry={() => {
             reset();
