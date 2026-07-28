@@ -13,22 +13,27 @@ const RX = FRAME_WIDTH / 2;
 const RY = FRAME_HEIGHT / 2;
 const DOT = 8;
 
+import { LivenessChallengeGuide } from './LivenessChallengeGuide';
+import { LivenessChallengeType } from '../types';
+
 interface Props {
   resolved: 'success' | 'danger' | null;
   scanning: boolean;
   subscribeCapture: (fn: () => void) => () => void;
+  currentChallenge?: LivenessChallengeType | null;
 }
 
 /**
  * High-tech biometric scanner overlay.
  * Features:
  * - Animated vertical laser scanning beam
+ * - Holographic active challenge visual guides (smile, blink, head turn arrows)
  * - 4 cardinal reticle target notches
  * - Ambient breathing perimeter glow
  * - Photo-burst flash & recoil animation
  * - Success/danger halo & haptic shake feedback
  */
-export function ScanOverlay({ resolved, scanning, subscribeCapture }: Props) {
+export function ScanOverlay({ resolved, scanning, subscribeCapture, currentChallenge }: Props) {
   const scanLine = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
   const flash = useRef(new Animated.Value(0)).current;
@@ -182,6 +187,12 @@ export function ScanOverlay({ resolved, scanning, subscribeCapture }: Props) {
       <View style={[styles.scrim, styles.bottom]} />
       <View style={[styles.scrim, styles.left]} />
       <View style={[styles.scrim, styles.right]} />
+
+      {/* Holographic 3D active challenge action guide animation overlay */}
+      <LivenessChallengeGuide
+        currentChallenge={currentChallenge ?? null}
+        resolved={resolved}
+      />
 
       {/* Soft outer ambient pulsing ring */}
       <Animated.View
