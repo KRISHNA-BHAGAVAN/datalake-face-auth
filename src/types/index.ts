@@ -25,6 +25,7 @@ export type FaceTemplate = {
   embedding: number[]; // Flattened float32 array
   createdAt: number;
   isSynced: boolean;
+  imageUri?: string; // Optional local SSD URI to enrolled face crop image
 };
 
 export type AntiSpoofResult = {

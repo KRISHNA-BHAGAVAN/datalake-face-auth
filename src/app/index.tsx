@@ -81,7 +81,7 @@ export default function HomeScreen() {
   const onRemoveSynced = () => {
     Alert.alert(
       'Remove synced copies?',
-      `${syncedCount} template${syncedCount === 1 ? '' : 's'} will be deleted from this device. They stay in the cloud. Templates not yet uploaded are kept.`,
+      `${syncedCount} template${syncedCount === 1 ? '' : 's'} and corresponding image${syncedCount === 1 ? '' : 's'} will be removed from this device. They remain safe in AWS.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -90,7 +90,7 @@ export default function HomeScreen() {
           onPress: async () => {
             const removed = await SyncManager.purgeLocal();
             refresh();
-            Alert.alert('Removed', `${removed} template${removed === 1 ? '' : 's'} deleted from this device.`);
+            Alert.alert('Removed', `${removed} template${removed === 1 ? '' : 's'} and face image${removed === 1 ? '' : 's'} removed from local storage.`);
           },
         },
       ]
@@ -99,8 +99,8 @@ export default function HomeScreen() {
 
   const onDeleteAll = () => {
     Alert.alert(
-      'Delete all templates?',
-      'Every enrolled face on this device is permanently deleted. This cannot be undone.',
+      'Delete all templates & images?',
+      'Every enrolled face template and corresponding image on this device will be permanently deleted. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -113,6 +113,18 @@ export default function HomeScreen() {
         },
       ]
     );
+  };
+
+  const onSaveOfflineBackup = async () => {
+    try {
+      const res = await OfflineStore.saveOfflineBackupToSSD();
+      Alert.alert(
+        'Offline SSD Backup Saved',
+        `Successfully backed up ${res.templatesCount} template(s) and ${res.imagesCount} image(s) to local SSD storage.\n\nYour new enrollments are safe even when offline.`
+      );
+    } catch (e) {
+      Alert.alert('Backup Failed', 'Failed to save offline SSD backup.');
+    }
   };
 
   const isEmpty = templateCount === 0;
@@ -165,13 +177,13 @@ export default function HomeScreen() {
         />
       </View>
 
-      <SectionLabel>Templates</SectionLabel>
+      <SectionLabel>Templates & Cloud Sync</SectionLabel>
       <ListGroup>
         <ListRow
           icon="upload"
           title="Upload to cloud"
           subtitle={
-            unsyncedCount === 0 ? 'Nothing pending' : 'Sends templates that are not yet uploaded'
+            unsyncedCount === 0 ? 'Nothing pending upload' : 'Store local templates and images in AWS'
           }
           badge={unsyncedCount > 0 ? String(unsyncedCount) : undefined}
           loading={syncing}
@@ -182,16 +194,24 @@ export default function HomeScreen() {
         <ListRow
           icon="download"
           title="Download from cloud"
-          subtitle="Pre-warms local cache from AWS for offline verification"
+          subtitle="Download templates and images from AWS"
           loading={downloading}
           onPress={onDownloadCloud}
+          hideChevron
+        />
+        <ListRow
+          icon="offline"
+          title="Save offline backup to SSD"
+          subtitle="Saves templates and images to local SSD when offline so no data is lost"
+          disabled={isEmpty}
+          onPress={onSaveOfflineBackup}
           hideChevron
         />
         <ListRow
           icon="removeLocal"
           title="Remove synced copies"
           subtitle={
-            syncedCount === 0 ? 'Nothing uploaded yet' : 'Frees local storage, keeps the cloud copy'
+            syncedCount === 0 ? 'Nothing uploaded yet' : 'Remove synced templates and images locally'
           }
           value={syncedCount > 0 ? String(syncedCount) : undefined}
           disabled={syncedCount === 0}
@@ -201,7 +221,7 @@ export default function HomeScreen() {
         <ListRow
           icon="delete"
           title="Delete all templates"
-          subtitle="Permanently erases every face on this device"
+          subtitle="Delete all templates and their corresponding images locally"
           destructive
           disabled={isEmpty}
           onPress={onDeleteAll}

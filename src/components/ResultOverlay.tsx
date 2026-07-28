@@ -9,6 +9,7 @@ import { DataRow } from './ui/List';
 import { Icon } from './ui/Icon';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { BenchmarkBadge, BenchmarkMetrics } from './ui/BenchmarkBadge';
+import { FaceMatchComparison } from './FaceMatchComparison';
 
 interface Props {
   status: 'SUCCESS' | 'FAILED';
@@ -20,6 +21,9 @@ interface Props {
   /** End-to-end recognition time in ms (verify only). */
   latencyMs?: number | null;
   benchmarkMetrics?: BenchmarkMetrics | null;
+  matchedImageUri?: string | null;
+  probeImageUri?: string | null;
+  capturedFrameUris?: string[];
   onRetry?: () => void;
   onDone: () => void;
 }
@@ -37,6 +41,9 @@ export function ResultOverlay({
   threshold = config.recognition.cosineSimilarityThreshold,
   latencyMs,
   benchmarkMetrics,
+  matchedImageUri,
+  probeImageUri,
+  capturedFrameUris,
   onRetry,
   onDone,
 }: Props) {
@@ -73,6 +80,15 @@ export function ResultOverlay({
             </Text>
             <Text style={[type.secondary, styles.message]}>{message}</Text>
           </View>
+
+          {/* Face match evidence comparison OR 3-frame enrollment burst */}
+          {(matchedImageUri || probeImageUri || (capturedFrameUris && capturedFrameUris.length > 0)) && (
+            <FaceMatchComparison
+              matchedImageUri={matchedImageUri}
+              probeImageUri={probeImageUri}
+              capturedFrameUris={capturedFrameUris}
+            />
+          )}
 
           {(confidence != null || latencyMs != null || benchmarkMetrics != null) && (
             <Card style={styles.metrics}>
