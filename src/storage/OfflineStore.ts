@@ -3,6 +3,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { copyAsync, getInfoAsync } from 'expo-file-system/legacy';
 import { FaceTemplate } from '../types';
 import { logger } from '../utils/logger';
+import { SQLiteStore } from './SQLiteStore';
 
 const LEGACY_STORE_KEY = 'FACE_AUTH_TEMPLATES';
 const INDEX_KEY = 'FACE_AUTH_TEMPLATES_INDEX_V2';
@@ -89,126 +90,86 @@ export class OfflineStore {
       logger.warn(`Failed to delete template image ${id}`, e);
     }
   }
-  /**
-   * Helper to fetch index array of saved template IDs.
-   */
-  private static async getIndex(): Promise<string[]> {
-    try {
-      const data = await SecureStore.getItemAsync(INDEX_KEY);
-      return data ? JSON.parse(data) : [];
-    } catch (e) {
-      logger.error('Error reading template index', e);
-      return [];
-    }
-  }
 
   /**
-   * Helper to write index array of template IDs.
-   */
-  private static async saveIndex(index: string[]): Promise<void> {
-    await SecureStore.setItemAsync(INDEX_KEY, JSON.stringify(index));
-  }
-
-  /**
-   * Auto-migrates legacy single-key JSON array format into chunked key-per-template format.
-   * Prevents SecureStore payload limit crashes (Android ~2KB limit per entry).
+   * Auto-migrates legacy SecureStore JSON string records into high-performance SQLite binary Float32Array BLOBs.
    */
   private static async migrateLegacyIfNeeded(): Promise<void> {
     try {
-      const legacyData = await SecureStore.getItemAsync(LEGACY_STORE_KEY);
-      if (!legacyData) return;
-
-      const templates: FaceTemplate[] = JSON.parse(legacyData);
-      const index: string[] = [];
-
-      for (const template of templates) {
-        if (template?.id) {
-          const itemKey = `${TEMPLATE_KEY_PREFIX}${template.id}`;
-          await SecureStore.setItemAsync(itemKey, JSON.stringify(template));
-          index.push(template.id);
+      const rawIndex = await SecureStore.getItemAsync(INDEX_KEY);
+      if (rawIndex) {
+        const index: string[] = JSON.parse(rawIndex);
+        let count = 0;
+        for (const id of index) {
+          const raw = await SecureStore.getItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
+          if (raw) {
+            const template: FaceTemplate = JSON.parse(raw);
+            await SQLiteStore.saveTemplate(template);
+            await SecureStore.deleteItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
+            count++;
+          }
         }
+        await SecureStore.deleteItemAsync(INDEX_KEY);
+        logger.info(`Migrated ${count} templates from SecureStore to SQLite Float32Array BLOB store.`);
       }
 
-      await this.saveIndex(index);
-      await SecureStore.deleteItemAsync(LEGACY_STORE_KEY);
-      logger.info(`Migrated ${templates.length} templates from legacy single-key store to chunked store.`);
+      const legacyData = await SecureStore.getItemAsync(LEGACY_STORE_KEY);
+      if (legacyData) {
+        const templates: FaceTemplate[] = JSON.parse(legacyData);
+        for (const template of templates) {
+          if (template?.id) {
+            await SQLiteStore.saveTemplate(template);
+          }
+        }
+        await SecureStore.deleteItemAsync(LEGACY_STORE_KEY);
+        logger.info(`Migrated single-key legacy store to SQLite Float32Array BLOB store.`);
+      }
     } catch (e) {
-      logger.error('Error migrating legacy templates store', e);
+      logger.error('Error migrating legacy templates store to SQLite', e);
     }
   }
 
   /**
-   * Retrieves all saved templates using fast concurrent chunked reads.
+   * Retrieves all saved templates using fast binary SQLite BLOB reads.
    */
   static async getTemplates(): Promise<FaceTemplate[]> {
     try {
       await this.migrateLegacyIfNeeded();
-      const index = await this.getIndex();
-      if (index.length === 0) return [];
-
-      const rawItems = await Promise.all(
-        index.map(async (id) => {
-          try {
-            const raw = await SecureStore.getItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
-            return raw ? (JSON.parse(raw) as FaceTemplate) : null;
-          } catch (e) {
-            logger.error(`Error reading template chunk ${id}`, e);
-            return null;
-          }
-        })
-      );
-
-      return rawItems.filter((t): t is FaceTemplate => t !== null);
+      return await SQLiteStore.getTemplates();
     } catch (e) {
-      logger.error('Error reading templates', e);
+      logger.error('Error reading templates from SQLite store', e);
       return [];
     }
   }
 
   /**
-   * Saves or updates a template in the chunked secure store.
+   * Saves or updates a template in the high-performance binary SQLite BLOB store.
    */
   static async saveTemplate(template: FaceTemplate): Promise<void> {
     try {
       await this.migrateLegacyIfNeeded();
-      const index = await this.getIndex();
-
-      const itemKey = `${TEMPLATE_KEY_PREFIX}${template.id}`;
-      await SecureStore.setItemAsync(itemKey, JSON.stringify(template));
-
-      if (!index.includes(template.id)) {
-        index.push(template.id);
-        await this.saveIndex(index);
-      }
+      await SQLiteStore.saveTemplate(template);
     } catch (e) {
-      logger.error('Error saving template chunk', e);
+      logger.error('Error saving template to SQLite store', e);
       throw e;
     }
   }
 
   /**
-   * Marks a template as synced locally.
+   * Marks a template as synced locally in SQLite.
    */
   static async markSynced(id: string): Promise<void> {
     try {
       await this.migrateLegacyIfNeeded();
-      const itemKey = `${TEMPLATE_KEY_PREFIX}${id}`;
-      const raw = await SecureStore.getItemAsync(itemKey);
-      if (raw) {
-        const template: FaceTemplate = JSON.parse(raw);
-        template.isSynced = true;
-        await SecureStore.setItemAsync(itemKey, JSON.stringify(template));
-      }
+      await SQLiteStore.markSynced(id);
     } catch (e) {
-      logger.error('Error marking template synced', e);
+      logger.error('Error marking template synced in SQLite store', e);
       throw e;
     }
   }
 
   /**
-   * Merges imported cloud templates into local storage.
-   * Useful for pre-warming offline cache after local purge or on a new device.
-   * Returns the count of newly added templates.
+   * Merges imported cloud templates into local SQLite storage.
    */
   static async mergeCloudTemplates(cloudTemplates: FaceTemplate[]): Promise<number> {
     try {
@@ -231,34 +192,25 @@ export class OfflineStore {
   }
 
   /**
-   * Deletes only templates already synced to AWS. Unsynced templates are kept.
+   * Deletes only templates already synced to AWS from SQLite.
    */
   static async purgeSynced(): Promise<number> {
     try {
-      const existing = await this.getTemplates();
-      const synced = existing.filter((t) => t.isSynced);
-
-      for (const template of synced) {
-        await this.deleteTemplate(template.id);
-      }
-
-      return synced.length;
+      await this.migrateLegacyIfNeeded();
+      return await SQLiteStore.purgeSynced();
     } catch (e) {
-      logger.error('Error purging synced templates', e);
+      logger.error('Error purging synced templates from SQLite store', e);
       return 0;
     }
   }
 
   /**
-   * Deletes a template by ID chunk.
+   * Deletes a template by ID from SQLite store and deletes local SSD crop image.
    */
   static async deleteTemplate(id: string): Promise<void> {
     try {
       await this.migrateLegacyIfNeeded();
-      const index = await this.getIndex();
-      const newIndex = index.filter((item) => item !== id);
-      await this.saveIndex(newIndex);
-      await SecureStore.deleteItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
+      await SQLiteStore.deleteTemplate(id);
       await this.deleteTemplateImage(id);
     } catch (e) {
       logger.error(`Error deleting template ${id}`, e);
@@ -266,15 +218,15 @@ export class OfflineStore {
   }
 
   /**
-   * Clears all saved templates, images, and indexes.
+   * Clears all saved templates, images, and SQLite databases.
    */
   static async clearAll(): Promise<void> {
     try {
-      const index = await this.getIndex();
-      for (const id of index) {
-        await SecureStore.deleteItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
-        await this.deleteTemplateImage(id);
+      const templates = await this.getTemplates();
+      for (const t of templates) {
+        await this.deleteTemplateImage(t.id);
       }
+      await SQLiteStore.clearAll();
       await SecureStore.deleteItemAsync(INDEX_KEY);
       await SecureStore.deleteItemAsync(LEGACY_STORE_KEY);
       if (backupDir.exists) {
@@ -287,7 +239,6 @@ export class OfflineStore {
 
   /**
    * Manually exports all current templates & face images to local SSD backup storage.
-   * Useful when offline with no AWS connection to prevent data loss on app restart.
    */
   static async saveOfflineBackupToSSD(): Promise<{ templatesCount: number; imagesCount: number }> {
     try {
@@ -318,7 +269,7 @@ export class OfflineStore {
   }
 
   /**
-   * Restores offline SSD backup into active store if needed.
+   * Restores offline SSD backup into active SQLite store if needed.
    */
   static async restoreOfflineBackupFromSSD(): Promise<{ restoredTemplates: number }> {
     try {

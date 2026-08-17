@@ -133,7 +133,7 @@ export default function HomeScreen() {
     <Screen scroll contentStyle={styles.content}>
       <View style={styles.header}>
         <View style={styles.headerText}>
-          <Text style={type.display}>Face Auth</Text>
+          <Text style={type.display}>DataLake 3.0</Text>
           <Text style={type.secondary}>Offline biometric attendance</Text>
         </View>
         <IconButton
@@ -158,7 +158,7 @@ export default function HomeScreen() {
         </View>
       </Card>
 
-      <SectionLabel>Authenticate</SectionLabel>
+      <SectionLabel>Quick Actions</SectionLabel>
       <View style={styles.actions}>
         <ActionCard
           icon="enroll"

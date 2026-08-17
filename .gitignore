@@ -67,3 +67,8 @@ DatalakeOfflineFaceAuthProposal.zip
 proposal/*.docx
 proposal/proposal.docx
 proposal-hackathon.zip
+# AGENTS.md
+# CLAUDE.md
+# .vscode
+# .agent
+# .claude

@@ -23,6 +23,7 @@ export type FaceLandmarkResult = {
 export type FaceTemplate = {
   id: string; // E.g., user id
   embedding: number[]; // Flattened float32 array
+  embeddings?: number[][]; // Optional multi-gallery embeddings for pose-diverse matching
   createdAt: number;
   isSynced: boolean;
   imageUri?: string; // Optional local SSD URI to enrolled face crop image
