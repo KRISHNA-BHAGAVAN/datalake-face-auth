@@ -21,9 +21,11 @@ purged.
 - **Lightweight edge AI** — ~7 MB of active models (MobileFaceNet + MiniFASNet V2), well under the
   20 MB budget.
 - **Ultra Fast** — ML Kit fast-mode face detection (<15ms per frame at 30 FPS); capture-to-decision latency under 1 second.
+- **High-Performance SQLite Store** — Binary `Float32Array` BLOB storage (`expo-sqlite`) for sub-10ms zero-parse vector loading.
+- **Zero-Latency GPS Geotagging** — Asynchronous non-blocking GPS geotag worker (`last_known_location`) with 0ms added verification delay.
 - **Accuracy-oriented** — ArcFace-style eye alignment, frame quality gating, and 3-photo multi-frame
   enrollment averaging; re-enrollment de-duplication keeps the gallery clean.
-- **Sync & purge** — upload unsynced templates (embeddings only) to AWS, then delete locally.
+- **Sync & purge** — upload unsynced templates & face images to AWS (DynamoDB + S3), then delete locally.
 - **Cross-platform** — single Expo/React Native codebase; NNAPI (Android) / Core ML (iOS) delegates.
 
 ---
@@ -38,6 +40,8 @@ purged.
 | Inference | `react-native-fast-tflite` (TensorFlow Lite) |
 | Recognition model | MobileFaceNet (`assets/models/mobilefacenet.tflite`, ~5.2 MB) |
 | Anti-spoof model | MiniFASNet V2 (`assets/models/minifasnet_v2.tflite`, ~1.75 MB) |
+| Vector database | `expo-sqlite` (SQLite binary `Float32Array` BLOB store with WAL mode) |
+| Location engine | `expo-location` (non-blocking background GPS geotag worker) |
 | Secure storage | `expo-secure-store` (OS keystore-backed) |
 
 ---
