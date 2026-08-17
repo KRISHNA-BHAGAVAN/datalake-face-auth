@@ -42,7 +42,6 @@ purged.
 | Anti-spoof model | MiniFASNet V2 (`assets/models/minifasnet_v2.tflite`, ~1.75 MB) |
 | Vector database | `expo-sqlite` (SQLite binary `Float32Array` BLOB store with WAL mode) |
 | Location engine | `expo-location` (non-blocking background GPS geotag worker) |
-| Secure storage | `expo-secure-store` (OS keystore-backed) |
 
 ---
 

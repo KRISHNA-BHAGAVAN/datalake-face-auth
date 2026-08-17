@@ -1,13 +1,8 @@
-import * as SecureStore from 'expo-secure-store';
 import { Directory, File, Paths } from 'expo-file-system';
 import { copyAsync, getInfoAsync } from 'expo-file-system/legacy';
 import { FaceTemplate } from '../types';
 import { logger } from '../utils/logger';
 import { SQLiteStore } from './SQLiteStore';
-
-const LEGACY_STORE_KEY = 'FACE_AUTH_TEMPLATES';
-const INDEX_KEY = 'FACE_AUTH_TEMPLATES_INDEX_V2';
-const TEMPLATE_KEY_PREFIX = 'FACE_AUTH_TEMPLATE_';
 
 const templatesDir = new Directory(Paths.document, 'face_templates');
 const backupDir = new Directory(Paths.document, 'offline_backup');
@@ -92,49 +87,10 @@ export class OfflineStore {
   }
 
   /**
-   * Auto-migrates legacy SecureStore JSON string records into high-performance SQLite binary Float32Array BLOBs.
-   */
-  private static async migrateLegacyIfNeeded(): Promise<void> {
-    try {
-      const rawIndex = await SecureStore.getItemAsync(INDEX_KEY);
-      if (rawIndex) {
-        const index: string[] = JSON.parse(rawIndex);
-        let count = 0;
-        for (const id of index) {
-          const raw = await SecureStore.getItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
-          if (raw) {
-            const template: FaceTemplate = JSON.parse(raw);
-            await SQLiteStore.saveTemplate(template);
-            await SecureStore.deleteItemAsync(`${TEMPLATE_KEY_PREFIX}${id}`);
-            count++;
-          }
-        }
-        await SecureStore.deleteItemAsync(INDEX_KEY);
-        logger.info(`Migrated ${count} templates from SecureStore to SQLite Float32Array BLOB store.`);
-      }
-
-      const legacyData = await SecureStore.getItemAsync(LEGACY_STORE_KEY);
-      if (legacyData) {
-        const templates: FaceTemplate[] = JSON.parse(legacyData);
-        for (const template of templates) {
-          if (template?.id) {
-            await SQLiteStore.saveTemplate(template);
-          }
-        }
-        await SecureStore.deleteItemAsync(LEGACY_STORE_KEY);
-        logger.info(`Migrated single-key legacy store to SQLite Float32Array BLOB store.`);
-      }
-    } catch (e) {
-      logger.error('Error migrating legacy templates store to SQLite', e);
-    }
-  }
-
-  /**
    * Retrieves all saved templates using fast binary SQLite BLOB reads.
    */
   static async getTemplates(): Promise<FaceTemplate[]> {
     try {
-      await this.migrateLegacyIfNeeded();
       return await SQLiteStore.getTemplates();
     } catch (e) {
       logger.error('Error reading templates from SQLite store', e);
@@ -147,7 +103,6 @@ export class OfflineStore {
    */
   static async saveTemplate(template: FaceTemplate): Promise<void> {
     try {
-      await this.migrateLegacyIfNeeded();
       await SQLiteStore.saveTemplate(template);
     } catch (e) {
       logger.error('Error saving template to SQLite store', e);
@@ -160,7 +115,6 @@ export class OfflineStore {
    */
   static async markSynced(id: string): Promise<void> {
     try {
-      await this.migrateLegacyIfNeeded();
       await SQLiteStore.markSynced(id);
     } catch (e) {
       logger.error('Error marking template synced in SQLite store', e);
@@ -196,7 +150,6 @@ export class OfflineStore {
    */
   static async purgeSynced(): Promise<number> {
     try {
-      await this.migrateLegacyIfNeeded();
       return await SQLiteStore.purgeSynced();
     } catch (e) {
       logger.error('Error purging synced templates from SQLite store', e);
@@ -209,7 +162,6 @@ export class OfflineStore {
    */
   static async deleteTemplate(id: string): Promise<void> {
     try {
-      await this.migrateLegacyIfNeeded();
       await SQLiteStore.deleteTemplate(id);
       await this.deleteTemplateImage(id);
     } catch (e) {
@@ -227,8 +179,6 @@ export class OfflineStore {
         await this.deleteTemplateImage(t.id);
       }
       await SQLiteStore.clearAll();
-      await SecureStore.deleteItemAsync(INDEX_KEY);
-      await SecureStore.deleteItemAsync(LEGACY_STORE_KEY);
       if (backupDir.exists) {
         backupDir.delete();
       }

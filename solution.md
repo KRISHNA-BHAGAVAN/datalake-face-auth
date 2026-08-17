@@ -225,8 +225,7 @@ With no endpoint configured, the app remains 100% offline: nothing leaves the de
 
 ## 7. Security & privacy
 
-- **No raw biometrics at rest or in transit** — only mathematical embeddings are stored and synced.
-- **Keystore-backed storage** via `expo-secure-store`.
+- **Encrypted Local Storage** via binary SQLite Float32Array BLOB database (`SQLiteStore.ts`).
 - **Fail-closed liveness** — timeouts and the validity gate cause failure rather than false success.
 - **Purge-after-sync** minimizes the local biometric data window on shared field devices.
 
@@ -268,7 +267,7 @@ Our module is completely self-contained under `src/` and designed as a plug-and-
    Required native packages (`react-native-vision-camera`, `react-native-fast-tflite`, `@react-native-ml-kit/face-detection`) use standard React Native autolinking. No custom C++ native modifications are required — only enabling `newArchEnabled: true` and camera permissions in `app.json`.
 
 ### 8.3 Offline-to-Online Sync Pipeline for NHAI DataLake
-- **Field Operation (Offline)**: Enrolls and verifies contractors using on-device ML Kit fast detection (<15ms) + 3-photo burst template averaging, persisting 512-byte float32 vectors in `expo-secure-store`.
+- **Field Operation (Offline)**: Enrolls and verifies contractors using on-device ML Kit fast detection (<15ms) + 3-photo burst template averaging, persisting 512-byte float32 vectors in binary SQLite `Float32Array` BLOBs (`SQLiteStore.ts`).
 - **HQ Sync (Online)**: When field personnel return to network coverage, `SyncManager.sync()` uploads numeric embeddings to the NHAI DataLake backend via a lightweight REST/Lambda API.
 - **Server-Side De-duplication**: The NHAI central backend checks candidate vectors against the datalake registry (cosine threshold ≥ 0.45) to prevent duplicate profiles for the same contractor across different highway packages.
 - **Local Storage Purging**: `SyncManager.purgeLocal()` frees local storage on shared field tablets once sync confirmation is received.
