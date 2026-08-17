@@ -20,6 +20,13 @@ export type FaceLandmarkResult = {
   rightEyeOpenProbability?: number;
 };
 
+export type LocationData = {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  timestamp: number;
+};
+
 export type FaceTemplate = {
   id: string; // E.g., user id
   embedding: number[]; // Flattened float32 array
@@ -27,6 +34,7 @@ export type FaceTemplate = {
   createdAt: number;
   isSynced: boolean;
   imageUri?: string; // Optional local SSD URI to enrolled face crop image
+  lastKnownLocation?: LocationData; // Accurate GPS geotag captured during verification
 };
 
 export type AntiSpoofResult = {

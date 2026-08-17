@@ -14,6 +14,8 @@ import { FaceRecognizer } from '../ml/FaceRecognizer';
 import { FaceAntiSpoof } from '../ml/FaceAntiSpoof';
 import { ImageProcessor } from '../ml/ImageProcessor';
 import { OfflineStore } from '../storage/OfflineStore';
+import { SQLiteStore } from '../storage/SQLiteStore';
+import { LocationService } from '../services/LocationService';
 import {
   computeCosineSimilarity,
   computeWeightedCosineSimilarity,
@@ -599,6 +601,17 @@ export function useFaceAuthVision() {
         if (maxSim >= config.recognition.cosineSimilarityThreshold) {
           setAuthStatus('SUCCESS');
           setMessage('Identity verified against your enrolled template.');
+
+          // Non-blocking background geotag capture (0ms verification latency)
+          if (matchedTemplate) {
+            LocationService.getGeotag()
+              .then((location) => {
+                if (location) {
+                  SQLiteStore.saveLastKnownLocation(matchedTemplate.id, location);
+                }
+              })
+              .catch((e) => logger.warn('Background location capture failed', e));
+          }
         } else {
           setAuthStatus('FAILED');
           setMessage('Face not recognized. Score is below the match threshold.');

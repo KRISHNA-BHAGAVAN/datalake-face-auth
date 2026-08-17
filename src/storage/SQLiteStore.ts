@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { FaceTemplate } from '../types';
+import { FaceTemplate, LocationData } from '../types';
 import { logger } from '../utils/logger';
 
 const DB_NAME = 'face_auth_v2.db';
@@ -19,10 +19,19 @@ export class SQLiteStore {
             embedding BLOB NOT NULL,
             created_at INTEGER NOT NULL,
             is_synced INTEGER NOT NULL DEFAULT 0,
-            embeddings_json TEXT
+            embeddings_json TEXT,
+            last_known_location TEXT
           );
           CREATE INDEX IF NOT EXISTS idx_is_synced ON face_templates(is_synced);
         `);
+
+        // Migration helper: add last_known_location column if table exists without it
+        try {
+          await db.execAsync('ALTER TABLE face_templates ADD COLUMN last_known_location TEXT;');
+        } catch (e) {
+          // Column already exists, ignore error
+        }
+
         return db;
       })();
     }
@@ -55,20 +64,39 @@ export class SQLiteStore {
       const blob = this.arrayToBlobBuffer(template.embedding);
       const isSyncedInt = template.isSynced ? 1 : 0;
       const embeddingsJson = template.embeddings ? JSON.stringify(template.embeddings) : null;
+      const locationJson = template.lastKnownLocation ? JSON.stringify(template.lastKnownLocation) : null;
 
       await db.runAsync(
-        `INSERT INTO face_templates (id, embedding, created_at, is_synced, embeddings_json)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO face_templates (id, embedding, created_at, is_synced, embeddings_json, last_known_location)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            embedding = excluded.embedding,
            created_at = excluded.created_at,
            is_synced = excluded.is_synced,
-           embeddings_json = excluded.embeddings_json`,
-        [template.id, blob, template.createdAt, isSyncedInt, embeddingsJson]
+           embeddings_json = excluded.embeddings_json,
+           last_known_location = COALESCE(excluded.last_known_location, face_templates.last_known_location)`,
+        [template.id, blob, template.createdAt, isSyncedInt, embeddingsJson, locationJson]
       );
     } catch (e) {
       logger.error('Error saving template to SQLite BLOB store', e);
       throw e;
+    }
+  }
+
+  /**
+   * Updates last known location for a specific face template asynchronously without blocking authentication.
+   */
+  static async saveLastKnownLocation(id: string, location: LocationData): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const locationJson = JSON.stringify(location);
+      await db.runAsync(
+        'UPDATE face_templates SET last_known_location = ? WHERE id = ?',
+        [locationJson, id]
+      );
+      logger.info(`Updated last_known_location for ${id} in SQLite.`);
+    } catch (e) {
+      logger.error(`Failed to update last_known_location for ${id}`, e);
     }
   }
 
@@ -84,7 +112,8 @@ export class SQLiteStore {
         created_at: number;
         is_synced: number;
         embeddings_json: string | null;
-      }>('SELECT id, embedding, created_at, is_synced, embeddings_json FROM face_templates ORDER BY created_at DESC');
+        last_known_location: string | null;
+      }>('SELECT id, embedding, created_at, is_synced, embeddings_json, last_known_location FROM face_templates ORDER BY created_at DESC');
 
       return rows.map((row) => ({
         id: row.id,
@@ -92,6 +121,7 @@ export class SQLiteStore {
         createdAt: row.created_at,
         isSynced: row.is_synced === 1,
         embeddings: row.embeddings_json ? JSON.parse(row.embeddings_json) : undefined,
+        lastKnownLocation: row.last_known_location ? JSON.parse(row.last_known_location) : undefined,
       }));
     } catch (e) {
       logger.error('Error loading face templates from SQLite store', e);

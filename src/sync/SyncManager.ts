@@ -55,6 +55,7 @@ export class SyncManager {
             id: t.id,
             embedding: t.embedding,
             createdAt: t.createdAt,
+            lastKnownLocation: t.lastKnownLocation || undefined,
             imageBase64: imageBase64 || undefined,
             s3Bucket: S3_BUCKET_NAME || undefined,
             s3Region: S3_REGION,
@@ -149,6 +150,7 @@ export class SyncManager {
           embedding,
           createdAt: Number(item.createdAt || Date.now()),
           isSynced: true,
+          lastKnownLocation: item.lastKnownLocation || undefined,
         });
       }
 
