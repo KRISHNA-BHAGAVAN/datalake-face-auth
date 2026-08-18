@@ -21,6 +21,12 @@
         "EXPO_PUBLIC_AWS_S3_BUCKET": "your-datalake-face-templates-bucket"
       }
     },
+    "preview-armv7": {
+      "extends": "preview",
+      "android": {
+        "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=armeabi-v7a"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "env": {
