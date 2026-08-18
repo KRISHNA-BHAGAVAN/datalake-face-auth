@@ -115,18 +115,6 @@ export default function HomeScreen() {
     );
   };
 
-  const onSaveOfflineBackup = async () => {
-    try {
-      const res = await OfflineStore.saveOfflineBackupToSSD();
-      Alert.alert(
-        'Offline SSD Backup Saved',
-        `Successfully backed up ${res.templatesCount} template(s) and ${res.imagesCount} image(s) to local SSD storage.\n\nYour new enrollments are safe even when offline.`
-      );
-    } catch (e) {
-      Alert.alert('Backup Failed', 'Failed to save offline SSD backup.');
-    }
-  };
-
   const isEmpty = templateCount === 0;
 
   return (
@@ -197,14 +185,6 @@ export default function HomeScreen() {
           subtitle="Download templates and images from AWS"
           loading={downloading}
           onPress={onDownloadCloud}
-          hideChevron
-        />
-        <ListRow
-          icon="offline"
-          title="Save offline backup to SSD"
-          subtitle="Saves templates and images to local SSD when offline so no data is lost"
-          disabled={isEmpty}
-          onPress={onSaveOfflineBackup}
           hideChevron
         />
         <ListRow

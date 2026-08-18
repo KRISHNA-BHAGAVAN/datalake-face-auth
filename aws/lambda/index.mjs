@@ -9,6 +9,18 @@ const docClient = DynamoDBDocumentClient.from(ddbClient);
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME || "datalake-images-store";
 const DYNAMODB_TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || "face_templates";
 const AWS_REGION = process.env.AWS_REGION || "ap-south-1";
+const DEDUP_THRESHOLD = 0.42;
+
+const cosineSimilarity = (a, b) => {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length === 0 || b.length === 0) return 0;
+  let dotProduct = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB) || 1);
+};
 
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method || event.httpMethod;
@@ -30,9 +42,28 @@ export const handler = async (event) => {
       const body = typeof event.body === "string" ? JSON.parse(event.body) : event.body;
       const templates = body?.templates || [];
 
+      const existing = await docClient.send(new ScanCommand({
+        TableName: DYNAMODB_TABLE_NAME
+      }));
+      const existingTemplates = existing.Items || [];
+
       let syncedCount = 0;
+      const duplicates = [];
+
       for (const t of templates) {
         if (!t.id || !t.embedding) continue;
+
+        let isDuplicate = false;
+        for (const existing of existingTemplates) {
+          const similarity = cosineSimilarity(t.embedding, existing.embedding);
+          if (similarity >= DEDUP_THRESHOLD) {
+            isDuplicate = true;
+            duplicates.push({ newId: t.id, existingId: existing.id, similarity });
+            break;
+          }
+        }
+
+        if (isDuplicate) continue;
 
         let s3ImageKey = null;
         let s3ImageUrl = null;
@@ -66,7 +97,7 @@ export const handler = async (event) => {
         syncedCount++;
       }
 
-      return { statusCode: 200, headers, body: JSON.stringify({ synced: syncedCount }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ synced: syncedCount, duplicates }) };
     }
 
     // --- DOWNLOAD (GET) ---

@@ -78,16 +78,19 @@ export class SyncManager {
       }
 
       const result = await response.json().catch(() => ({}));
-      const duplicates = Array.isArray(result?.duplicates) ? result.duplicates.length : 0;
+      const duplicates = Array.isArray(result?.duplicates) ? result.duplicates : [];
+      const duplicateIds = new Set(duplicates.map((d: { newId: string }) => d.newId));
 
-      // Mark all uploaded templates as synced locally
+      // Mark only successfully synced templates (not duplicates) as synced
       for (const template of unsynced) {
-        await OfflineStore.markSynced(template.id);
+        if (!duplicateIds.has(template.id)) {
+          await OfflineStore.markSynced(template.id);
+        }
       }
 
       return {
         synced: typeof result?.synced === 'number' ? result.synced : unsynced.length,
-        duplicates,
+        duplicates: duplicates.length,
       };
     } catch (error) {
       logger.error('SyncManager: Sync failed', error);

@@ -5,8 +5,6 @@ import { logger } from '../utils/logger';
 import { SQLiteStore } from './SQLiteStore';
 
 const templatesDir = new Directory(Paths.document, 'face_templates');
-const backupDir = new Directory(Paths.document, 'offline_backup');
-const backupImagesDir = new Directory(backupDir, 'images');
 
 export class OfflineStore {
   /**
@@ -179,72 +177,9 @@ export class OfflineStore {
         await this.deleteTemplateImage(t.id);
       }
       await SQLiteStore.clearAll();
-      if (backupDir.exists) {
-        backupDir.delete();
-      }
     } catch (e) {
       logger.error('Error clearing all templates', e);
     }
   }
 
-  /**
-   * Manually exports all current templates & face images to local SSD backup storage.
-   */
-  static async saveOfflineBackupToSSD(): Promise<{ templatesCount: number; imagesCount: number }> {
-    try {
-      if (!backupDir.exists) backupDir.create();
-      if (!backupImagesDir.exists) backupImagesDir.create();
-
-      const templates = await this.getTemplates();
-      let imagesSaved = 0;
-
-      for (const t of templates) {
-        const srcFile = new File(templatesDir, `${t.id}.jpg`);
-        if (srcFile.exists) {
-          const destFile = new File(backupImagesDir, `${t.id}.jpg`);
-          srcFile.copy(destFile);
-          imagesSaved++;
-        }
-      }
-
-      const backupFile = new File(backupDir, 'templates_backup.json');
-      backupFile.write(JSON.stringify(templates));
-
-      logger.info(`SSD Offline Backup complete: ${templates.length} templates, ${imagesSaved} images.`);
-      return { templatesCount: templates.length, imagesCount: imagesSaved };
-    } catch (e) {
-      logger.error('Error saving offline SSD backup', e);
-      throw e;
-    }
-  }
-
-  /**
-   * Restores offline SSD backup into active SQLite store if needed.
-   */
-  static async restoreOfflineBackupFromSSD(): Promise<{ restoredTemplates: number }> {
-    try {
-      const backupFile = new File(backupDir, 'templates_backup.json');
-      if (!backupFile.exists) return { restoredTemplates: 0 };
-
-      const content = await backupFile.text();
-      const templates: FaceTemplate[] = JSON.parse(content);
-      let restored = 0;
-
-      for (const t of templates) {
-        await this.saveTemplate(t);
-        const backupImg = new File(backupImagesDir, `${t.id}.jpg`);
-        if (backupImg.exists) {
-          const activeImg = new File(templatesDir, `${t.id}.jpg`);
-          backupImg.copy(activeImg);
-        }
-        restored++;
-      }
-
-      logger.info(`Restored ${restored} templates from SSD backup.`);
-      return { restoredTemplates: restored };
-    } catch (e) {
-      logger.error('Error restoring SSD backup', e);
-      return { restoredTemplates: 0 };
-    }
-  }
 }

@@ -38,7 +38,6 @@
         }
       ],
       "expo-asset",
-      "expo-secure-store",
       "react-native-fast-tflite",
       [
         "expo-camera",

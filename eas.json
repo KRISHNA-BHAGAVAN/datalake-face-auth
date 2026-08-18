@@ -12,10 +12,22 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_AWS_REGION": "ap-south-1",
+        "EXPO_PUBLIC_FACE_SYNC_API_URL": "https://mtzktz5qy4zoskqgms6yfghk7i0vqtim.lambda-url.ap-south-1.on.aws/",
+        "EXPO_PUBLIC_FACE_SYNC_API_KEY": "some_random_string",
+        "EXPO_PUBLIC_AWS_S3_BUCKET": "your-datalake-face-templates-bucket"
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_AWS_REGION": "ap-south-1",
+        "EXPO_PUBLIC_FACE_SYNC_API_URL": "https://mtzktz5qy4zoskqgms6yfghk7i0vqtim.lambda-url.ap-south-1.on.aws/",
+        "EXPO_PUBLIC_FACE_SYNC_API_KEY": "some_random_string",
+        "EXPO_PUBLIC_AWS_S3_BUCKET": "your-datalake-face-templates-bucket"
+      }
     }
   },
   "submit": {
