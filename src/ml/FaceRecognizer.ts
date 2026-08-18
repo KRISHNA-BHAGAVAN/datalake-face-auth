@@ -15,8 +15,12 @@ export class FaceRecognizer {
     if (faceNetModel) return; // already loaded
 
     try {
-      logger.log('Loading FaceRecognizer model...');
-      const delegates: TensorflowModelDelegate[] = Platform.OS === 'ios' ? ['core-ml'] : ['nnapi'];
+      const delegates: TensorflowModelDelegate[] =
+        Platform.OS === 'ios'
+          ? ['core-ml']
+          : Platform.OS === 'android' && typeof Platform.Version === 'number' && Platform.Version >= 27
+          ? ['nnapi']
+          : [];
       const modelSource = await resolveTfliteAsset(require('../../assets/models/mobilefacenet.tflite'));
       faceNetModel = await loadTensorflowModel(
         modelSource,

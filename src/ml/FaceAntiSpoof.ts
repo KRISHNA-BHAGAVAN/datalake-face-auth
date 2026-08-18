@@ -18,7 +18,12 @@ export class FaceAntiSpoof {
   static async init(): Promise<void> {
     if (antiSpoofModel) return;
 
-    const delegates: TensorflowModelDelegate[] = Platform.OS === 'ios' ? ['core-ml'] : ['nnapi'];
+    const delegates: TensorflowModelDelegate[] =
+      Platform.OS === 'ios'
+        ? ['core-ml']
+        : Platform.OS === 'android' && typeof Platform.Version === 'number' && Platform.Version >= 27
+        ? ['nnapi']
+        : [];
     const modelSource = await resolveTfliteAsset(require('../../assets/models/minifasnet_v2.tflite'));
     antiSpoofModel = await loadTensorflowModel(
       modelSource,

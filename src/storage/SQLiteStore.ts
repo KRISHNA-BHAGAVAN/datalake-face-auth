@@ -39,7 +39,7 @@ export class SQLiteStore {
   }
 
   /**
-   * Converts a number[] or Float32Array embedding into a compact 2,048-byte binary Uint8Array BLOB.
+   * Converts a number[] or Float32Array embedding into a compact 768-byte (192-dim) binary Uint8Array BLOB.
    */
   private static arrayToBlobBuffer(embedding: number[] | Float32Array): Uint8Array {
     const f32 = embedding instanceof Float32Array ? embedding : new Float32Array(embedding);
